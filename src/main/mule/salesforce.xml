@@ -1,0 +1,927 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns="http://www.mulesoft.org/schema/mule/core" 
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit"
+	xmlns:db="http://www.mulesoft.org/schema/mule/db"
+	xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:os="http://www.mulesoft.org/schema/mule/os"
+	xmlns:file="http://www.mulesoft.org/schema/mule/file"
+	xmlns:vm="http://www.mulesoft.org/schema/mule/vm"
+	xmlns:email="http://www.mulesoft.org/schema/mule/email"
+	xmlns:api-gateway="http://www.mulesoft.org/schema/mule/api-gateway"
+	xmlns:secure-properties="http://www.mulesoft.org/schema/mule/secure-properties"
+	xsi:schemaLocation="
+		http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+		http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+		http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd
+		http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+		http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
+		http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+		http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+		http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd
+		http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd
+		http://www.mulesoft.org/schema/mule/email http://www.mulesoft.org/schema/mule/email/current/mule-email.xsd
+		http://www.mulesoft.org/schema/mule/api-gateway http://www.mulesoft.org/schema/mule/api-gateway/current/mule-api-gateway.xsd
+		http://www.mulesoft.org/schema/mule/secure-properties http://www.mulesoft.org/schema/mule/secure-properties/current/mule-secure-properties.xsd">
+
+	<!-- ================================================================= -->
+	<!-- GLOBAL CONFIGURATIONS                                             -->
+	<!-- Global property defining default encryption key (can be overridden via -Dencryption.key=...) -->
+	<global-property doc:name="Global Property" doc:id="global-prop-enc-key" name="encryption.key" value="hackathon2026Key" />
+
+	<configuration-properties doc:name="Configuration properties" doc:id="cfg-props" file="config.yaml" />
+
+	<!-- Secure Configuration Properties for Encrypted Passwords -->
+	<secure-properties:config name="Secure_Properties_Config" doc:name="Secure Properties Config" doc:id="sec-props-cfg" file="secure-properties.yaml" key="${encryption.key}">
+		<secure-properties:encrypt algorithm="Blowfish" mode="CBC" />
+	</secure-properties:config>
+
+	<!-- API Autodiscovery Configuration linking Experience API to Anypoint API Manager (Uncomment in CloudHub / Production) -->
+	<!-- <api-gateway:autodiscovery apiId="${api.autodiscovery.id}" flowRef="exp-catalog-sync-api-main" doc:name="API Autodiscovery" doc:id="api-autodiscovery-cfg" ignoreBasePath="true" /> -->
+
+	<http:listener-config name="HTTP_Listener_config" doc:name="HTTP Listener config" doc:id="http-listener-cfg">
+		<http:listener-connection host="${http.host}" port="${http.port}" />
+	</http:listener-config>
+
+	<apikit:config name="catalog-sync-api-config" api="api/catalog-sync.raml" outboundHeadersMapName="outboundHeaders" httpStatusVarName="httpStatus" doc:name="APIKit Router Config" doc:id="apikit-cfg" />
+
+	<db:config name="Database_Config" doc:name="Database Config" doc:id="db-cfg">
+		<db:my-sql-connection host="${db.host}" port="${db.port}" user="${db.user}" password="${secure::db.password}" database="${db.name}" />
+	</db:config>
+
+	<salesforce:sfdc-config name="Salesforce_Config" doc:name="Salesforce Config" doc:id="sfdc-cfg">
+		<salesforce:basic-connection username="${salesforce.username}" password="${secure::salesforce.password}" securityToken="${secure::salesforce.securityToken}" url="${salesforce.url}" />
+	</salesforce:sfdc-config>
+
+	<!-- Object Store for Persistent Delta Watermark -->
+	<os:object-store name="Watermark_Object_Store" entryTtl="30" entryTtlUnit="DAYS" persistent="true" doc:name="Watermark Object Store" doc:id="os-watermark-cfg" />
+
+	<!-- File Connector Configuration for Rejects CSV -->
+	<file:config name="File_Config" doc:name="File Config" doc:id="file-cfg" />
+
+	<!-- VM Queue Configuration for Queue & DLQ Processing -->
+	<vm:config name="VM_Config" doc:name="VM Config" doc:id="vm-cfg">
+		<vm:queues>
+			<vm:queue queueName="catalog.sync.queue" queueType="PERSISTENT" />
+			<vm:queue queueName="catalog.sync.dlq" queueType="PERSISTENT" />
+		</vm:queues>
+	</vm:config>
+
+	<!-- Global Error Handler for APIKit and Application Errors -->
+	<error-handler name="api-global-error-handler" doc:id="api-err-handler" doc:description="Global Error Handler for APIKit and Application Errors">
+		<on-error-propagate type="APIKIT:BAD_REQUEST, APP:BAD_REQUEST" enableNotifications="true" logException="true">
+			<set-variable value="400" variableName="httpStatus" />
+			<set-payload value="#[%dw 2.0 output application/json --- { error: 'BAD_REQUEST', message: error.description default 'Bad Request', correlationId: vars.correlationId, timestamp: now() }]" />
+		</on-error-propagate>
+		<on-error-propagate type="APIKIT:NOT_FOUND, APP:NOT_FOUND" enableNotifications="true" logException="true">
+			<set-variable value="404" variableName="httpStatus" />
+			<set-payload value="#[%dw 2.0 output application/json --- { error: 'NOT_FOUND', message: error.description default 'Resource Not Found', correlationId: vars.correlationId, timestamp: now() }]" />
+		</on-error-propagate>
+		<on-error-propagate type="APP:CONCURRENCY_CONFLICT" enableNotifications="true" logException="true">
+			<set-variable value="409" variableName="httpStatus" />
+			<set-payload value="#[%dw 2.0 output application/json --- { error: 'CONFLICT', message: error.description default 'A sync run is already in progress for this scope', correlationId: vars.correlationId, timestamp: now() }]" />
+		</on-error-propagate>
+		<on-error-propagate type="APIKIT:METHOD_NOT_ALLOWED" enableNotifications="true" logException="true">
+			<set-variable value="405" variableName="httpStatus" />
+			<set-payload value="#[%dw 2.0 output application/json --- { error: 'METHOD_NOT_ALLOWED', message: error.description default 'Method Not Allowed', correlationId: vars.correlationId, timestamp: now() }]" />
+		</on-error-propagate>
+		<on-error-propagate type="APIKIT:NOT_ACCEPTABLE" enableNotifications="true" logException="true">
+			<set-variable value="406" variableName="httpStatus" />
+			<set-payload value="#[%dw 2.0 output application/json --- { error: 'NOT_ACCEPTABLE', message: error.description default 'Not Acceptable', correlationId: vars.correlationId, timestamp: now() }]" />
+		</on-error-propagate>
+		<on-error-propagate type="APIKIT:UNSUPPORTED_MEDIA_TYPE" enableNotifications="true" logException="true">
+			<set-variable value="415" variableName="httpStatus" />
+			<set-payload value="#[%dw 2.0 output application/json --- { error: 'UNSUPPORTED_MEDIA_TYPE', message: error.description default 'Unsupported Media Type', correlationId: vars.correlationId, timestamp: now() }]" />
+		</on-error-propagate>
+		<on-error-propagate type="ANY" enableNotifications="true" logException="true">
+			<set-variable value="500" variableName="httpStatus" />
+			<set-payload value="#[%dw 2.0 output application/json --- { error: 'INTERNAL_SERVER_ERROR', message: error.description default 'Internal Server Error', correlationId: vars.correlationId, timestamp: now() }]" />
+		</on-error-propagate>
+	</error-handler>
+
+	<!-- ================================================================= -->
+	<!-- 1. EXPERIENCE LAYER (APIKit Router & Endpoints)                   -->
+	<!-- ================================================================= -->
+	
+	<!-- APIKit Main Router -->
+	<flow name="exp-catalog-sync-api-main" doc:id="flow-api-main" doc:description="Experience Layer: Main HTTP entry point routing /api/* requests via APIKit Router">
+		<http:listener config-ref="HTTP_Listener_config" path="/api/*" doc:name="HTTP Inbound /api/*" doc:id="http-inbound-api">
+			<http:response statusCode="#[vars.httpStatus default 200]">
+				<http:headers>#[{ 'X-Correlation-ID': vars.correlationId }]</http:headers>
+			</http:response>
+			<http:error-response statusCode="#[vars.httpStatus default 500]">
+				<http:body>#[payload]</http:body>
+				<http:headers>#[{ 'X-Correlation-ID': vars.correlationId }]</http:headers>
+			</http:error-response>
+		</http:listener>
+		<set-variable value="#[attributes.headers['x-correlation-id'] default correlationId]" variableName="correlationId" doc:name="Set Correlation ID" doc:id="set-corr-id-main" />
+		<apikit:router config-ref="catalog-sync-api-config" doc:name="APIKit Router" doc:id="apikit-router-main" />
+		<error-handler ref="api-global-error-handler" />
+	</flow>
+
+	<!-- APIKit Console Flow -->
+	<flow name="exp-catalog-sync-api-console" doc:id="flow-api-console" doc:description="Experience Layer: APIKit Console for interactive API documentation">
+		<http:listener config-ref="HTTP_Listener_config" path="/console/*" doc:name="HTTP Inbound /console/*" doc:id="http-inbound-console">
+			<http:response statusCode="#[vars.httpStatus default 200]" />
+			<http:error-response statusCode="#[vars.httpStatus default 500]">
+				<http:body>#[payload]</http:body>
+			</http:error-response>
+		</http:listener>
+		<apikit:console config-ref="catalog-sync-api-config" doc:name="APIKit Console" doc:id="apikit-console-main" />
+	</flow>
+
+	<!-- POST /catalog/sync Endpoint Flow -->
+	<flow name="post:\catalog\sync:application\json:catalog-sync-api-config" doc:id="flow-post-sync" doc:description="Experience Layer: Handles POST /catalog/sync to trigger synchronization">
+		<logger level="INFO" doc:name="Log Sync Request" doc:id="log-sync-req" message="#['[EXPERIENCE] Received POST /catalog/sync request. Correlation ID: ' ++ vars.correlationId]" />
+		<!-- Delegate execution to Process Layer -->
+		<flow-ref name="proc-catalog-sync-flow" doc:name="Call Process Layer Sync" doc:id="ref-proc-sync" doc:description="Executes validation, concurrency check, and sync workflow in Process Layer" />
+		<!-- Return HTTP 202 Accepted Response -->
+		<set-variable value="202" doc:name="Set HTTP 202" doc:id="set-http-202" variableName="httpStatus" />
+		<ee:transform doc:name="Format 202 Response" doc:id="tf-202-resp">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	runId: vars.runId,
+	triggerType: vars.triggerType,
+	scope: vars.scope,
+	status: "RUNNING",
+	correlationId: vars.correlationId,
+	recordsProcessed: vars.recordsRead default 0
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+	</flow>
+
+	<!-- GET /catalog/runs/{runId} Endpoint Flow -->
+	<flow name="get:\catalog\runs\(runId):catalog-sync-api-config" doc:id="flow-get-run-status" doc:description="Experience Layer: Handles GET /catalog/runs/{runId} to retrieve run outcomes">
+		<set-variable value="#[attributes.uriParams.runId]" variableName="runId" doc:name="Extract runId from URI Params" doc:id="set-uri-run-id" />
+		<logger level="INFO" doc:name="Log Status Request" doc:id="log-status-req" message="#['[EXPERIENCE] Received GET /catalog/runs/' ++ vars.runId]" />
+		<!-- Delegate to Process Layer Status Flow -->
+		<flow-ref name="proc-get-run-status-flow" doc:name="Call Process Layer Status" doc:id="ref-proc-status" doc:description="Retrieves run metrics and per-record logs from Process Layer" />
+	</flow>
+
+	<!-- Scheduled Trigger for Delta Synchronization -->
+	<flow name="experience-scheduled-sync-trigger-flow" doc:id="exp-sched-trigger-flow" doc:description="Experience Layer: Automatically triggers synchronization on scheduled interval">
+		<scheduler doc:name="Scheduler Trigger" doc:id="sched-sync-trigger" doc:description="Periodically initiates catalog synchronization">
+			<scheduling-strategy>
+				<fixed-frequency frequency="${scheduler.frequency}" timeUnit="MINUTES" />
+			</scheduling-strategy>
+		</scheduler>
+		<set-variable value="#['RUN-' ++ (now() as String {format: 'yyyyMMdd-HHmmss'})]" doc:name="Generate Run ID" doc:id="set-sched-run-id" variableName="runId" />
+		<set-variable value="#[correlationId]" doc:name="Set Correlation ID" doc:id="set-sched-corr-id" variableName="correlationId" />
+		<set-variable value="SCHEDULED" doc:name="Set Trigger Type" doc:id="set-sched-trigger-type" variableName="triggerType" />
+		<set-variable value="DELTA" doc:name="Set Scope DELTA" doc:id="set-sched-scope" variableName="scope" />
+		<set-variable value="SYSTEM_SCHEDULER" doc:name="Set Requested By" doc:id="set-sched-req-by" variableName="requestedBy" />
+		<set-variable value="#[[]]" doc:name="Empty Product Codes" doc:id="set-sched-empty-codes" variableName="productCodes" />
+		<logger level="INFO" doc:name="Log Scheduler Trigger" doc:id="log-sched-trigger" message="#['[EXPERIENCE] Scheduled sync trigger executed. Run ID: ' ++ vars.runId]" />
+		<flow-ref name="proc-catalog-sync-flow" doc:name="Call Process Sync Flow" doc:id="ref-proc-sync-sched" doc:description="Delegates execution to Process Layer sync flow" />
+	</flow>
+
+	<!-- ================================================================= -->
+	<!-- 2. PROCESS LAYER                                                 -->
+	<!-- ================================================================= -->
+	
+	<!-- Process Layer: Coordinates Sync Request, Validation & Concurrency -->
+	<flow name="proc-catalog-sync-flow" doc:id="proc-sync-flow-id" doc:description="Process Layer: Validates request, checks concurrency, registers run, and triggers synchronization">
+		<!-- Step 1: Validate API Request Payload -->
+		<ee:transform doc:name="Validate Request" doc:id="tf-val-req" doc:description="Validates fullSync and productCodes data types">
+			<ee:variables>
+				<ee:set-variable variableName="validationResult" resource="dwl/validate-sync-request.dwl" />
+			</ee:variables>
+		</ee:transform>
+		
+		<choice doc:name="Check If Payload Valid" doc:id="choice-val-payload">
+			<when expression="#[vars.validationResult.valid == false]">
+				<raise-error type="APP:BAD_REQUEST" description="#[vars.validationResult.error default 'Malformed request body']" doc:name="Raise 400 Bad Request" doc:id="raise-400-bad-req" />
+			</when>
+		</choice>
+
+		<!-- Step 2: Normalize and extract parameters -->
+		<set-variable value="#[output application/java --- (payload.fullSync default false) == true]" doc:name="Set fullSync" doc:id="set-param-full-sync" variableName="fullSync" />
+		<set-variable value="#[output application/java --- if (payload.productCodes != null and (typeOf(payload.productCodes) as String == 'Array')) payload.productCodes else (vars.productCodes default [])]" doc:name="Set productCodes" doc:id="set-param-prod-codes" variableName="productCodes" />
+		<set-variable value="#[output application/java --- if (vars.fullSync) 'FULL' else if (!isEmpty(vars.productCodes)) 'PARTIAL' else (vars.scope default 'DELTA')]" doc:name="Set scope" doc:id="set-param-scope" variableName="scope" />
+		<set-variable value="#[output application/java --- (payload.requestedBy default (vars.requestedBy default 'API_USER')) as String]" doc:name="Set requestedBy" doc:id="set-param-req-by" variableName="requestedBy" />
+		<set-variable value="#[output application/java --- (vars.triggerType default 'MANUAL_API') as String]" doc:name="Set triggerType" doc:id="set-param-trig-type" variableName="triggerType" />
+		<set-variable value="#[output application/java --- (vars.runId default ('RUN-' ++ (now() as String {format: 'yyyyMMdd-HHmmss'}))) as String]" doc:name="Generate Run ID" doc:id="set-param-run-id" variableName="runId" />
+		<set-variable value="#[now()]" doc:name="Set Start Timestamp" doc:id="set-start-ts" variableName="runStartTime" />
+
+		<!-- Step 3: Concurrency Guard (Check if active run already in flight for this scope) -->
+		<flow-ref name="system-db-check-active-run-flow" doc:name="Check Active Run in DB" doc:id="ref-check-active-run" doc:description="Checks if another run is RUNNING for the same scope" />
+		<choice doc:name="Check Concurrency" doc:id="choice-concurrency">
+			<when expression="#[!isEmpty(vars.activeRunRecords)]">
+				<raise-error type="APP:CONCURRENCY_CONFLICT" description="#['A sync run is already in progress for scope: ' ++ vars.scope ++ ' (Active Run: ' ++ vars.activeRunRecords[0].run_id ++ ')']" doc:name="Raise 409 Conflict" doc:id="raise-409-conflict" />
+			</when>
+		</choice>
+
+		<!-- Step 4: Delta Watermark Retrieval from Object Store -->
+		<choice doc:name="Check Scope for Watermark" doc:id="choice-scope-wm">
+			<when expression="#[vars.scope == 'DELTA']">
+				<!-- Retrieve persistent watermark from Object Store -->
+				<os:retrieve key="last_successful_watermark" objectStore="Watermark_Object_Store" target="storedWatermark" doc:name="Retrieve Stored Watermark" doc:id="os-get-wm">
+					<os:default-value>#[p('sync.defaultWatermark')]</os:default-value>
+				</os:retrieve>
+				<set-variable value="#[if (vars.storedWatermark == '1970-01-01 00:00:00' or isEmpty(vars.storedWatermark)) p('sync.defaultWatermark') else vars.storedWatermark]" doc:name="Set Watermark From" doc:id="set-wm-from" variableName="watermarkFrom" />
+				<logger level="INFO" doc:name="Log Watermark Used" doc:id="log-wm-used" message="#['[WATERMARK] Reading delta changes since last watermark: ' ++ vars.watermarkFrom]" />
+			</when>
+			<otherwise>
+				<set-variable value="#[p('sync.defaultWatermark')]" doc:name="Default Epoch Watermark" doc:id="set-epoch-wm" variableName="watermarkFrom" />
+			</otherwise>
+		</choice>
+
+		<!-- Step 5: Execute Core Synchronization Flow -->
+		<flow-ref name="process-catalog-sync-flow" doc:name="Execute Core Sync Flow" doc:id="ref-exec-core-sync" doc:description="Reuses core synchronization flow" />
+	</flow>
+
+	<!-- Process Layer: Core Synchronization Execution -->
+	<flow name="process-catalog-sync-flow" doc:id="proc-catalog-sync-flow" doc:description="Process Layer: Coordinates database reading, validation, transformation, Salesforce upsert, and logging">
+		<!-- Initialize Metrics and Rejection Lists -->
+		<set-variable value="#[0]" doc:name="Initialize Created Count" doc:id="init-created-count" variableName="createdCount" />
+		<set-variable value="#[0]" doc:name="Initialize Updated Count" doc:id="init-updated-count" variableName="updatedCount" />
+		<set-variable value="#[0]" doc:name="Initialize Deactivated Count" doc:id="init-deactivated-count" variableName="deactivatedCount" />
+		<set-variable value="#[0]" doc:name="Initialize Retried Count" doc:id="init-retried-count" variableName="retriedCount" />
+		<set-variable value="#[0]" doc:name="Initialize Failed Count" doc:id="init-failed-count" variableName="failedCount" />
+		<set-variable value="#[[]]" doc:name="Initialize Rejects List" doc:id="init-rejects-list" variableName="rejectRecords" />
+		
+		<!-- Step 1: Register run in sync_run table -->
+		<flow-ref name="system-db-create-sync-run-flow" doc:name="Register Sync Run in DB" doc:id="ref-create-sync-run" doc:description="Inserts initial RUNNING record in sync_run table" />
+		
+		<!-- Step 2: Read product records from MySQL ERP tables (Filtered by watermark & page size) -->
+		<flow-ref name="system-db-read-products-flow" doc:name="Read Products from MySQL" doc:id="ref-read-mysql-products" doc:description="Executes ERP product and price query against MySQL" />
+		
+		<!-- Apply optional product-code filter -->
+		<ee:transform doc:name="Filter Products by productCodes" doc:id="tf-filter-prod-codes" doc:description="Filters records to match requested productCodes if provided">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/java
+---
+if (!isEmpty(vars.productCodes) and !(vars.fullSync default false))
+	payload filter ((item) -> vars.productCodes contains item.erp_code)
+else
+	payload]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+
+		<!-- Step 3: Log number of records read -->
+		<set-variable value="#[sizeOf(payload default [])]" doc:name="Set Records Read Count" doc:id="set-records-read" variableName="recordsRead" />
+		<logger level="INFO" doc:name="Log Record Count" doc:id="log-records-read" message="#['[PROCESS] Total records read from MySQL ERP: ' ++ vars.recordsRead]" />
+		
+		<!-- Optional: Publish to VM Queue (Chunk Sequence & Work Distribution) -->
+		<choice doc:name="Check If Records Found" doc:id="choice-records-found">
+			<when expression="#[vars.recordsRead &gt; 0]">
+				<flow-ref name="sys-vm-publish-chunk-subflow" doc:name="Publish Work to VM Queue" doc:id="ref-vm-publish" doc:description="Publishes work metadata to queue" />
+			</when>
+		</choice>
+
+		<!-- Retrieve and cache Price Book IDs from Salesforce (Upfront Caching, payload preserved via target) -->
+		<flow-ref name="system-sfdc-get-pricebooks-flow" doc:name="Lookup Salesforce Price Books" doc:id="ref-lookup-pricebooks" doc:description="Fetches Standard Price Book and ERP Catalog Price Book IDs" target="pricebookLookupResult" />
+		
+		<!-- Compute latest modified timestamp for potential watermark advancement -->
+		<set-variable value="#[%dw 2.0 output application/java var dates = (payload map ((p) -> p.last_modified default p.LAST_MODIFIED default p.updated_at default null)) filter (!isEmpty($)) --- if (!isEmpty(dates)) max(dates map ($ as String)) else (now() as String {format: 'yyyy-MM-dd HH:mm:ss'})]" doc:name="Compute Max Last Modified" doc:id="set-max-mod" variableName="maxLastModified" />
+
+		<!-- Process each record individually -->
+		<foreach doc:name="For Each ERP Product" doc:id="foreach-product" collection="#[payload]">
+			<set-variable value="#[payload]" doc:name="Save Current Record" doc:id="set-current-record" variableName="currentRecord" />
+			
+			<try doc:name="Try Record Processing" doc:id="try-record-proc">
+				<!-- Step 4: Validate product record (Strict validation rules) -->
+				<choice doc:name="Validate Product Record" doc:id="choice-validate" doc:description="Validates ERP code, product name, valid family, unit of measure, and non-negative unit price">
+					<!-- VALID CONDITION -->
+					<when expression="#[!isEmpty(payload.erp_code default '') and !isEmpty(payload.product_name default '') and !isEmpty(payload.family default '') and (['Hardware', 'Service', 'Software'] contains payload.family) and !isEmpty(payload.uom default '') and (payload.unit_price != null) and ((payload.unit_price as Number default -1) &gt;= 0)]">
+						<logger level="INFO" doc:name="Log Valid Record" doc:id="log-valid-record" message="#['[PROCESS] Record is VALID: ' ++ vars.currentRecord.erp_code ++ ' (' ++ vars.currentRecord.product_name ++ ')']" />
+						
+						<!-- Step 5: Transform valid data using DataWeave -->
+						<ee:transform doc:name="Transform to Product2" doc:id="tf-product2" doc:description="Maps MySQL fields to Salesforce Product2 attributes">
+							<ee:message>
+							</ee:message>
+							<ee:variables>
+								<ee:set-variable variableName="productPayload"><![CDATA[%dw 2.0
+output application/java
+---
+[{
+	ERP_Product_Code__c: vars.currentRecord.erp_code,
+	Name: vars.currentRecord.product_name,
+	Description: vars.currentRecord.description default "",
+	Family: vars.currentRecord.family,
+	IsActive: upper(vars.currentRecord.status default "ACTIVE") != "DISCONTINUED"
+}]]]></ee:set-variable>
+							</ee:variables>
+						</ee:transform>
+						
+						<!-- Step 6: Upsert Salesforce Product2 using ERP_Product_Code__c as external ID -->
+						<flow-ref name="system-sfdc-upsert-product-flow" doc:name="Upsert Product2" doc:id="ref-upsert-product" doc:description="Upserts Product2 record into Salesforce" />
+						
+						<!-- Step 7: Ensure Standard Price Book entry exists before Custom Price Book entry -->
+						<flow-ref name="system-sfdc-sync-pricebook-entries-flow" doc:name="Sync Price Book Entries" doc:id="ref-sync-pbe" doc:description="Manages Standard and Configured Price Book entries" />
+						
+						<!-- Step 8 & 9: Log success in database and console -->
+						<set-variable value="SUCCESS" doc:name="Set Status SUCCESS" doc:id="set-st-success" variableName="recordStatus" />
+						<set-variable value="UPSERT" doc:name="Set Operation UPSERT" doc:id="set-op-upsert" variableName="operation" />
+						<set-variable value="#[null]" doc:name="Clear Error Code" doc:id="clr-err-code" variableName="errorCode" />
+						<set-variable value="#[null]" doc:name="Clear Error Message" doc:id="clr-err-msg" variableName="errorMessage" />
+						
+						<flow-ref name="system-db-log-product-sync-flow" doc:name="Log Success to DB" doc:id="ref-log-success-db" doc:description="Writes successful result to product_sync_log table" />
+						
+						<!-- Track Created, Updated and Deactivated counts -->
+						<choice doc:name="Check Operation and Status" doc:id="choice-track-metrics">
+							<when expression='#[upper(vars.currentRecord.status default "ACTIVE") == "DISCONTINUED"]'>
+								<set-variable value="#[vars.deactivatedCount + 1]" doc:name="Increment Deactivated Count" doc:id="inc-deact" variableName="deactivatedCount" />
+							</when>
+							<when expression="#[vars.isCreated == true]">
+								<set-variable value="#[vars.createdCount + 1]" doc:name="Increment Created Count" doc:id="inc-created" variableName="createdCount" />
+							</when>
+							<otherwise>
+								<set-variable value="#[vars.updatedCount + 1]" doc:name="Increment Updated Count" doc:id="inc-updated" variableName="updatedCount" />
+							</otherwise>
+						</choice>
+						
+						<logger level="INFO" doc:name="Log Success Message" doc:id="log-item-success" message="#['[SUCCESS] Product ' ++ vars.currentRecord.erp_code ++ ' synchronized successfully. Salesforce Product ID: ' ++ (vars.salesforceProductId default 'N/A')]" />
+					</when>
+					
+					<!-- INVALID CONDITION -->
+					<otherwise>
+						<!-- Identify reason for rejection -->
+						<ee:transform doc:name="Identify Validation Error" doc:id="tf-val-err" doc:description="Determines specific validation failure reason">
+							<ee:message>
+							</ee:message>
+							<ee:variables>
+								<ee:set-variable variableName="validationError"><![CDATA[%dw 2.0
+output application/java
+var p = vars.currentRecord
+---
+if (isEmpty(p.erp_code default ""))
+	{ code: "MISSING_ERP_CODE", message: "ERP product code is missing" }
+else if (isEmpty(p.product_name default ""))
+	{ code: "MISSING_PRODUCT_NAME", message: "Product name is missing" }
+else if (p.unit_price == null)
+	{ code: "MISSING_PRICE", message: "Unit price is missing" }
+else if ((p.unit_price as Number default -1) < 0)
+	{ code: "NEGATIVE_PRICE", message: "Unit price cannot be negative: " ++ (p.unit_price as String) }
+else if (isEmpty(p.family default ""))
+	{ code: "MISSING_FAMILY", message: "Product family is missing" }
+else if (!(["Hardware", "Service", "Software"] contains p.family))
+	{ code: "INVALID_FAMILY", message: "Invalid product family: " ++ (p.family as String) }
+else if (isEmpty(p.uom default ""))
+	{ code: "MISSING_UOM", message: "Unit of measure is missing" }
+else
+	{ code: "VALIDATION_FAILED", message: "Product record failed validation checks" }]]></ee:set-variable>
+							</ee:variables>
+						</ee:transform>
+						
+						<set-variable value="REJECTED" doc:name="Set Status REJECTED" doc:id="set-st-rejected" variableName="recordStatus" />
+						<set-variable value="VALIDATE" doc:name="Set Operation VALIDATE" doc:id="set-op-val" variableName="operation" />
+						<set-variable value="#[vars.validationError.code]" doc:name="Set Error Code" doc:id="set-err-code-val" variableName="errorCode" />
+						<set-variable value="#[vars.validationError.message]" doc:name="Set Error Message" doc:id="set-err-msg-val" variableName="errorMessage" />
+						<set-variable value="#[null]" doc:name="Clear Salesforce Product ID" doc:id="clr-sf-id" variableName="salesforceProductId" />
+						<set-variable value="#[null]" doc:name="Clear Pricebook Entry ID" doc:id="clr-pbe-id" variableName="pricebookEntryId" />
+						
+						<!-- Append to Rejects List for CSV and Case generation -->
+						<set-variable value="#[vars.rejectRecords + { erpCode: vars.currentRecord.erp_code default 'UNKNOWN', operation: vars.operation, errorCode: vars.errorCode, errorMessage: vars.errorMessage, retryCount: 0 }]" doc:name="Append to Rejects List" doc:id="app-reject-list" variableName="rejectRecords" />
+						
+						<!-- Step 8 & 9: Log failure in database and console -->
+						<flow-ref name="system-db-log-product-sync-flow" doc:name="Log Rejection to DB" doc:id="ref-log-reject-db" doc:description="Writes rejection result to product_sync_log table" />
+						
+						<set-variable value="#[vars.failedCount + 1]" doc:name="Increment Failed Count" doc:id="inc-fail-val" variableName="failedCount" />
+						<logger level="WARN" doc:name="Log Rejection Message" doc:id="log-item-reject" message="#['[REJECTED] Product ' ++ (vars.currentRecord.erp_code default 'UNKNOWN') ++ ' rejected. Code: ' ++ vars.errorCode ++ ', Reason: ' ++ vars.errorMessage]" />
+					</otherwise>
+				</choice>
+				
+				<!-- Error handling for individual record -->
+				<error-handler>
+					<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" doc:id="on-err-cont-item" doc:description="Catches individual record errors to prevent terminating the entire synchronization run">
+						<set-variable value="FAILED" doc:name="Set Status FAILED" doc:id="set-st-failed-err" variableName="recordStatus" />
+						<set-variable value="ERROR" doc:name="Set Operation ERROR" doc:id="set-op-err" variableName="operation" />
+						<set-variable value="#[error.errorType.identifier default 'PROCESSING_ERROR']" doc:name="Set Error Code" doc:id="set-err-code-ex" variableName="errorCode" />
+						<set-variable value="#[error.description default 'Unexpected processing error occurred']" doc:name="Set Error Message" doc:id="set-err-msg-ex" variableName="errorMessage" />
+						
+						<!-- Append to Rejects List -->
+						<set-variable value="#[vars.rejectRecords + { erpCode: vars.currentRecord.erp_code default 'UNKNOWN', operation: vars.operation, errorCode: vars.errorCode, errorMessage: vars.errorMessage, retryCount: 0 }]" doc:name="Append Error to Rejects List" doc:id="app-err-reject-list" variableName="rejectRecords" />
+						
+						<flow-ref name="system-db-log-product-sync-flow" doc:name="Log Error to DB" doc:id="ref-log-err-db" doc:description="Writes runtime exception details to product_sync_log" />
+						<set-variable value="#[vars.failedCount + 1]" doc:name="Increment Failed Count" doc:id="inc-fail-err" variableName="failedCount" />
+						<logger level="ERROR" doc:name="Log Exception Message" doc:id="log-item-err" message="#['[ERROR] Exception processing product ' ++ (vars.currentRecord.erp_code default 'UNKNOWN') ++ ': ' ++ error.description]" />
+					</on-error-continue>
+				</error-handler>
+			</try>
+		</foreach>
+		
+		<!-- Step 5: Generate Rejects CSV if permanent failures/rejections occurred -->
+		<choice doc:name="Check If Rejects Exist" doc:id="choice-rejects-exist">
+			<when expression="#[!isEmpty(vars.rejectRecords)]">
+				<flow-ref name="sys-file-write-rejects-csv-flow" doc:name="Write Rejects CSV" doc:id="ref-write-rejects-csv" doc:description="Generates CATALOG_REJECTS_[runId].csv" />
+			</when>
+		</choice>
+
+		<!-- Step 6: Create ONE Salesforce Case summarizing run if permanent failures occurred -->
+		<choice doc:name="Check If Failures Occurred" doc:id="choice-failures-exist">
+			<when expression="#[vars.failedCount &gt; 0]">
+				<flow-ref name="sys-sfdc-create-exception-case-flow" doc:name="Create Exception Case in Salesforce" doc:id="ref-create-sf-case" doc:description="Creates single exception Case in Salesforce summarizing failed records" />
+			</when>
+		</choice>
+
+		<!-- Step 7: Advance Delta Watermark in Object Store ONLY IF run had 0 failures and scope is DELTA -->
+		<choice doc:name="Check Watermark Advancement Eligibility" doc:id="choice-adv-wm">
+			<when expression="#[vars.scope == 'DELTA' and vars.failedCount == 0 and vars.recordsRead &gt; 0]">
+				<os:store key="last_successful_watermark" objectStore="Watermark_Object_Store" doc:name="Advance Watermark in Object Store" doc:id="os-advance-wm">
+					<os:value>#[vars.maxLastModified]</os:value>
+				</os:store>
+				<logger level="INFO" doc:name="Log Watermark Advanced" doc:id="log-wm-adv" message="#['[WATERMARK] Successfully advanced last_successful_watermark to ' ++ vars.maxLastModified]" />
+			</when>
+			<otherwise>
+				<logger level="INFO" doc:name="Log Watermark Retained" doc:id="log-wm-retained" message="#['[WATERMARK] Watermark NOT advanced (Scope: ' ++ (vars.scope default 'FULL') ++ ', Failures: ' ++ (vars.failedCount default 0) ++ '). Retained at ' ++ (vars.watermarkFrom default '1971-01-01 00:00:00')]" />
+			</otherwise>
+		</choice>
+
+		<!-- Step 8: Prepare Email Summary -->
+		<flow-ref name="sys-email-send-summary-flow" doc:name="Send Summary Email" doc:id="ref-send-summary-email" doc:description="Prepares and triggers summary email notification" />
+
+		<!-- Step 9: Update sync_run table with final completion metrics -->
+		<flow-ref name="system-db-update-sync-run-flow" doc:name="Update Sync Run Metrics" doc:id="ref-update-sync-run" doc:description="Updates sync_run table with completion timestamp, case number, rejects file, and record counts" />
+		
+		<!-- Step 10: Final summary log & Alert Evaluation -->
+		<set-variable value="#[(now() - (vars.runStartTime default now())).seconds default 0]" variableName="runDurationSeconds" doc:name="Calculate Run Duration" doc:id="calc-duration" />
+		<logger level="INFO" doc:name="Log Summary" doc:id="log-sync-summary" message="#['[PROCESS] Sync completed. Run ID: ' ++ vars.runId ++ ' | Read: ' ++ vars.recordsRead ++ ' | Created: ' ++ vars.createdCount ++ ' | Updated: ' ++ vars.updatedCount ++ ' | Deactivated: ' ++ vars.deactivatedCount ++ ' | Failed/Rejected: ' ++ vars.failedCount ++ ' | Duration: ' ++ vars.runDurationSeconds ++ 's']" />
+		
+		<!-- Alert Check: Alert if failures exceed configured threshold -->
+		<choice doc:name="Check Failure Alert Threshold" doc:id="choice-fail-alert">
+			<when expression="#[vars.failedCount &gt; (p('alerts.maxFailuresThreshold') as Number default 5)]">
+				<logger level="WARN" doc:name="Log High Failure Alert" doc:id="log-high-fail-alert" message="#['[ALERT] High failure threshold breached! Run ' ++ vars.runId ++ ' experienced ' ++ vars.failedCount ++ ' failures.']" />
+			</when>
+		</choice>
+	</flow>
+
+	<!-- Process Layer: Get Run Status Flow -->
+	<flow name="proc-get-run-status-flow" doc:id="proc-get-status-flow-id" doc:description="Process Layer: Coordinates querying sync_run and product_sync_log and formatting status response">
+		<flow-ref name="system-db-get-sync-run-flow" doc:name="Query Run from DB" doc:id="ref-qry-run-db" doc:description="Queries sync_run table for specific run ID" />
+		<choice doc:name="Check If Run Found" doc:id="choice-run-found">
+			<when expression="#[isEmpty(payload)]">
+				<raise-error type="APP:NOT_FOUND" description="#['Sync run not found for runId: ' ++ vars.runId]" doc:name="Raise 404 Not Found" doc:id="raise-404-not-found" />
+			</when>
+			<otherwise>
+				<set-variable value="#[payload[0]]" variableName="runRecord" doc:name="Store Run Record" doc:id="set-run-record" />
+				<flow-ref name="system-db-get-product-sync-log-flow" doc:name="Query Product Logs from DB" doc:id="ref-qry-logs-db" doc:description="Queries product_sync_log table for specific run ID" />
+				<set-variable value="#[payload]" variableName="logRecords" doc:name="Store Log Records" doc:id="set-log-records" />
+				<set-variable value="200" variableName="httpStatus" doc:name="Set HTTP 200" doc:id="set-http-200" />
+				<ee:transform doc:name="Format Run Status Response" doc:id="tf-format-status" doc:description="Formats sync_run and product_sync_log into RunStatusResponse">
+					<ee:message>
+						<ee:set-payload resource="dwl/format-run-status.dwl" />
+					</ee:message>
+				</ee:transform>
+			</otherwise>
+		</choice>
+	</flow>
+
+	<!-- ================================================================= -->
+	<!-- 3. SYSTEM LAYER: FILE CONNECTOR & REJECTS                         -->
+	<!-- ================================================================= -->
+
+	<!-- System Layer: Write Rejects CSV File -->
+	<flow name="sys-file-write-rejects-csv-flow" doc:id="sys-file-rejects-flow" doc:description="System Layer: Writes rejected/failed records to CATALOG_REJECTS_[runId].csv">
+		<set-variable value="#['CATALOG_REJECTS_' ++ (vars.runId default 'RUN') ++ '.csv']" variableName="rejectsFileName" doc:name="Set Rejects File Name" doc:id="set-rej-fname" />
+		<set-variable value="#[p('file.rejectsPath') ++ '/' ++ vars.rejectsFileName]" variableName="rejectsFilePath" doc:name="Set Rejects File Path" doc:id="set-rej-fpath" />
+		
+		<try doc:name="Try Rejects File Write" doc:id="try-write-file">
+			<ee:transform doc:name="Format Rejects to CSV" doc:id="tf-rejects-csv" doc:description="Generates standard CSV with required reject fields">
+				<ee:message>
+					<ee:set-payload><![CDATA[%dw 2.0
+output application/csv header=true
+---
+vars.rejectRecords map (r) -> {
+	runId: vars.runId,
+	erpCode: r.erpCode,
+	operation: r.operation,
+	errorCode: r.errorCode,
+	errorMessage: r.errorMessage,
+	retryCount: r.retryCount default 0
+}]]></ee:set-payload>
+				</ee:message>
+			</ee:transform>
+			
+			<file:write config-ref="File_Config" path="#[vars.rejectsFilePath]" doc:name="Write Rejects CSV" doc:id="write-rejects-file" />
+			<logger level="INFO" doc:name="Log Rejects File Written" doc:id="log-rej-written" message="#['[FILE] Rejects CSV successfully written to ' ++ vars.rejectsFilePath]" />
+			
+			<error-handler>
+				<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" doc:id="on-err-file">
+					<logger level="ERROR" doc:name="Log File Write Error" doc:id="log-err-file" message="#['[FILE] Failed to write rejects file: ' ++ error.description]" />
+					<set-variable value="#[null]" variableName="rejectsFilePath" doc:name="Clear Rejects Path on Error" doc:id="clr-rej-path" />
+				</on-error-continue>
+			</error-handler>
+		</try>
+	</flow>
+
+	<!-- ================================================================= -->
+	<!-- 3. SYSTEM LAYER: SALESFORCE EXCEPTION CASE                        -->
+	<!-- ================================================================= -->
+
+	<!-- System Layer: Create Salesforce Exception Case -->
+	<flow name="sys-sfdc-create-exception-case-flow" doc:id="sys-sfdc-case-flow" doc:description="System Layer: Creates a single Salesforce Case summarizing run failures">
+		<try doc:name="Try Create Case" doc:id="try-create-case">
+			<ee:transform doc:name="Format Case Payload" doc:id="tf-case-payload" doc:description="Prepares single summary Case for Salesforce">
+				<ee:message>
+				</ee:message>
+				<ee:variables>
+					<ee:set-variable variableName="casePayload"><![CDATA[%dw 2.0
+output application/java
+---
+[{
+	Subject: "[ALERT] CatalogPriceBookSync Failures - Run " ++ (vars.runId default "RUN-UNKNOWN"),
+	Description: "Run ID: " ++ (vars.runId default "RUN-UNKNOWN") ++ "\n" ++
+				 "Trigger: " ++ (vars.triggerType default "MANUAL") ++ "\n" ++
+				 "Failed Records Count: " ++ ((vars.failedCount default 0) as String) ++ "\n" ++
+				 "Correlation ID: " ++ (vars.correlationId default "N/A") ++ "\n\n" ++
+				 "Failure Details:\n" ++
+				 ((vars.rejectRecords default [] map (r) -> "- " ++ (r.erpCode default "UNKNOWN" as String) ++ " (" ++ (r.errorCode default "ERR" as String) ++ "): " ++ (r.errorMessage default "Error" as String)) joinBy "\n"),
+	Status: "New",
+	Origin: "Other",
+	Priority: "High"
+}]]]></ee:set-variable>
+				</ee:variables>
+			</ee:transform>
+			
+			<salesforce:create type="Case" config-ref="Salesforce_Config" doc:name="Create Summary Case" doc:id="sfdc-create-case">
+				<salesforce:records><![CDATA[#[vars.casePayload]]]></salesforce:records>
+			</salesforce:create>
+			
+			<set-variable value="#[payload.items[0].id default payload[0].id default payload.id]" variableName="sfCaseId" doc:name="Store SF Case ID" doc:id="set-case-id" />
+			
+			<!-- Query Case Number from Salesforce -->
+			<salesforce:query config-ref="Salesforce_Config" doc:name="Query Case Number" doc:id="sfdc-qry-casenum">
+				<salesforce:salesforce-query><![CDATA[SELECT CaseNumber FROM Case WHERE Id = ':caseId' LIMIT 1]]></salesforce:salesforce-query>
+				<salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	caseId: vars.sfCaseId
+}]]]></salesforce:parameters>
+			</salesforce:query>
+			
+			<set-variable value="#[payload[0].CaseNumber]" variableName="sfCaseNumber" doc:name="Store Case Number" doc:id="set-case-number" />
+			<logger level="INFO" doc:name="Log Case Created" doc:id="log-case-created" message="#['[SALESFORCE] Exception Case created. ID: ' ++ (vars.sfCaseId default 'N/A') ++ ', Case Number: ' ++ (vars.sfCaseNumber default 'N/A')]" />
+			
+			<error-handler>
+				<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" doc:id="on-err-case">
+					<logger level="ERROR" doc:name="Log Case Error" doc:id="log-err-case" message="#['[SALESFORCE] Failed to create exception Case: ' ++ error.description]" />
+					<set-variable value="#[null]" variableName="sfCaseNumber" doc:name="Clear Case Number" doc:id="clr-case-num" />
+				</on-error-continue>
+			</error-handler>
+		</try>
+	</flow>
+
+	<!-- ================================================================= -->
+	<!-- 3. SYSTEM LAYER: EMAIL NOTIFICATION                               -->
+	<!-- ================================================================= -->
+
+	<!-- System Layer: Prepare and Send Summary Email -->
+	<flow name="sys-email-send-summary-flow" doc:id="sys-email-flow" doc:description="System Layer: Prepares run summary email and dispatches if SMTP is enabled">
+		<set-variable value="#[%dw 2.0 output application/java --- { runId: vars.runId, triggerType: vars.triggerType, scope: vars.scope, status: (if (vars.failedCount &gt; 0) 'COMPLETED_WITH_ERRORS' else 'COMPLETED'), durationSeconds: vars.runDurationSeconds default 0, recordsRead: vars.recordsRead default 0, createdCount: (vars.createdCount default 0) + (vars.updatedCount default 0), deactivatedCount: vars.deactivatedCount default 0, retriedCount: vars.retriedCount default 0, failedCount: vars.failedCount default 0, sfCaseNumber: vars.sfCaseNumber default '', rejectsFile: vars.rejectsFilePath default '', correlationId: vars.correlationId }]" variableName="runSummaryData" doc:name="Prepare Summary Data Map" doc:id="set-sum-data" />
+		
+		<ee:transform doc:name="Format Email Summary Body" doc:id="tf-email-body" doc:description="Renders text/plain email body from DataWeave template">
+			<ee:message>
+				<ee:set-payload resource="dwl/run-summary-email.dwl" />
+			</ee:message>
+		</ee:transform>
+		
+		<choice doc:name="Check If SMTP Enabled" doc:id="choice-smtp-enabled">
+			<when expression='#[p("smtp.enabled") == "true" or (vars.forceEmailSent default false) == true]'>
+				<logger level="INFO" doc:name="Log Sending Email" doc:id="log-send-email" message="#['[EMAIL] Sending run summary email to ' ++ (p('smtp.to') default 'alerts@example.com')]" />
+				<set-variable value="SENT" variableName="emailStatus" doc:name="Set Email Status SENT" doc:id="set-email-sent" />
+			</when>
+			<otherwise>
+				<logger level="INFO" doc:name="Log Email Skipped" doc:id="log-email-skipped" message="[EMAIL] SMTP transport disabled in configuration (smtp.enabled=false). Run summary prepared successfully." />
+				<set-variable value="SKIPPED_NO_SMTP" variableName="emailStatus" doc:name="Set Email Status SKIPPED" doc:id="set-email-skipped" />
+			</otherwise>
+		</choice>
+	</flow>
+
+	<!-- ================================================================= -->
+	<!-- 3. SYSTEM LAYER: VM QUEUE PUBLISH SUBFLOW                         -->
+	<!-- ================================================================= -->
+
+	<sub-flow name="sys-vm-publish-chunk-subflow" doc:id="sf-vm-publish" doc:description="System Layer: Publishes batch chunk metadata to VM Queue">
+		<set-variable value="#[%dw 2.0 output application/json --- { runId: vars.runId, correlationId: vars.correlationId, scope: vars.scope, recordsCount: vars.recordsRead, chunkSequence: 1, retryCount: 0 }]" variableName="queueMessage" doc:name="Build Queue Message" doc:id="set-q-msg" />
+		<try doc:name="Try VM Publish" doc:id="try-vm-pub">
+			<vm:publish config-ref="VM_Config" queueName="catalog.sync.queue" doc:name="Publish to catalog.sync.queue" doc:id="vm-pub-msg">
+				<vm:content>#[vars.queueMessage]</vm:content>
+			</vm:publish>
+			<logger level="DEBUG" doc:name="Log VM Published" doc:id="log-vm-pub" message="#['[VM] Published message for run ' ++ vars.runId ++ ' to catalog.sync.queue']" />
+			<error-handler>
+				<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" doc:id="on-err-vm">
+					<logger level="WARN" doc:name="Log VM Error" doc:id="log-err-vm" message="#['[VM] Queue publish bypassed: ' ++ error.description]" />
+				</on-error-continue>
+			</error-handler>
+		</try>
+	</sub-flow>
+
+	<!-- ================================================================= -->
+	<!-- 3. SYSTEM LAYER: DATABASE (MySQL)                                 -->
+	<!-- ================================================================= -->
+
+	<!-- System Layer: Check Active Run for Concurrency Guard -->
+	<flow name="system-db-check-active-run-flow" doc:id="sys-db-check-run-flow" doc:description="System Layer: Checks if any run is currently RUNNING for the requested scope">
+		<db:select config-ref="Database_Config" doc:name="Select RUNNING Runs" doc:id="db-sel-active-run" target="activeRunRecords" doc:description="Queries sync_run for RUNNING records">
+			<db:sql><![CDATA[SELECT run_id, run_status, scope, started_at
+FROM sync_run
+WHERE scope = :scope
+  AND run_status = 'RUNNING'
+LIMIT 1]]></db:sql>
+			<db:input-parameters><![CDATA[#[{
+	scope: vars.scope default "FULL"
+}]]]></db:input-parameters>
+		</db:select>
+	</flow>
+
+	<!-- System Layer: Get Run Summary by runId -->
+	<flow name="system-db-get-sync-run-flow" doc:id="sys-db-get-run-flow" doc:description="System Layer: Fetches sync_run record by runId">
+		<db:select config-ref="Database_Config" doc:name="Select sync_run by runId" doc:id="db-sel-sync-run">
+			<db:sql><![CDATA[SELECT run_id, trigger_type, requested_by, scope, records_read, created_count, failed_count, run_status, correlation_id, started_at, completed_at
+FROM sync_run
+WHERE run_id = :runId]]></db:sql>
+			<db:input-parameters><![CDATA[#[{
+	runId: vars.runId default ""
+}]]]></db:input-parameters>
+		</db:select>
+	</flow>
+
+	<!-- System Layer: Get Per-Record Logs by runId -->
+	<flow name="system-db-get-product-sync-log-flow" doc:id="sys-db-get-logs-flow" doc:description="System Layer: Fetches product_sync_log rows for a given runId">
+		<db:select config-ref="Database_Config" doc:name="Select product_sync_log by runId" doc:id="db-sel-prod-logs">
+			<db:sql><![CDATA[SELECT log_seq, run_id, erp_code, operation, salesforce_id, pricebook_entry_id, record_status, error_code, error_message, processed_at
+FROM product_sync_log
+WHERE run_id = :runId
+ORDER BY log_seq ASC]]></db:sql>
+			<db:input-parameters><![CDATA[#[{
+	runId: vars.runId default ""
+}]]]></db:input-parameters>
+		</db:select>
+	</flow>
+
+	<!-- System Layer: Register Run in sync_run table -->
+	<flow name="system-db-create-sync-run-flow" doc:id="sys-db-create-run-flow" doc:description="System Layer: Inserts initial sync run audit record into sync_run table">
+		<db:insert config-ref="Database_Config" doc:name="Insert into sync_run" doc:id="db-insert-sync-run" doc:description="Creates initial record with RUNNING status in sync_run">
+			<db:sql><![CDATA[INSERT INTO sync_run (
+    run_id,
+    trigger_type,
+    requested_by,
+    scope,
+    watermark_from,
+    records_read,
+    run_status,
+    correlation_id,
+    started_at
+)
+VALUES (
+    :runId,
+    :triggerType,
+    :requestedBy,
+    :scope,
+    :watermarkFrom,
+    0,
+    'RUNNING',
+    :correlationId,
+    CURRENT_TIMESTAMP
+)]]></db:sql>
+			<db:input-parameters><![CDATA[#[{
+    runId: vars.runId default "",
+    triggerType: vars.triggerType default "MANUAL_API",
+    requestedBy: vars.requestedBy default "API_USER",
+    scope: vars.scope default "FULL",
+    watermarkFrom: vars.watermarkFrom default "1971-01-01 00:00:00",
+    correlationId: vars.correlationId default ""
+}]]]></db:input-parameters>
+		</db:insert>
+	</flow>
+
+	<!-- System Layer: Read Products and Prices from MySQL ERP Tables with Watermark Filtering -->
+	<flow name="system-db-read-products-flow" doc:id="sys-db-read-flow" doc:description="System Layer: Queries product_master and product_price tables in MySQL ERP database filtered by watermark">
+		<db:select config-ref="Database_Config" doc:name="Select ERP Products and Prices" doc:id="db-select-products" doc:description="Joins product_master with product_price and filters changes since watermark">
+			<db:sql><![CDATA[SELECT
+    pm.erp_code,
+    pm.product_name,
+    pm.description,
+    pm.family,
+    pm.uom,
+    pm.status,
+    pp.unit_price,
+    pp.currency,
+    GREATEST(pm.updated_at, pp.updated_at) AS last_modified
+FROM product_master pm
+JOIN product_price pp
+    ON pm.erp_code = pp.erp_code
+WHERE GREATEST(pm.updated_at, pp.updated_at) >= :watermarkFrom
+ORDER BY GREATEST(pm.updated_at, pp.updated_at) ASC
+LIMIT 200]]></db:sql>
+			<db:input-parameters><![CDATA[#[{
+	watermarkFrom: vars.watermarkFrom default "1971-01-01 00:00:00"
+}]]]></db:input-parameters>
+		</db:select>
+	</flow>
+
+	<!-- System Layer: Log Individual Product Outcome into product_sync_log table -->
+	<flow name="system-db-log-product-sync-flow" doc:id="sys-db-log-flow" doc:description="System Layer: Records individual product success or failure into product_sync_log table">
+		<db:insert config-ref="Database_Config" doc:name="Insert into product_sync_log" doc:id="db-insert-prod-log" doc:description="Audits product status, operation, and errors in database">
+			<db:sql><![CDATA[INSERT INTO product_sync_log (
+    run_id,
+    erp_code,
+    operation,
+    salesforce_id,
+    pricebook_entry_id,
+    record_status,
+    error_code,
+    error_message,
+    retry_count,
+    correlation_id,
+    processed_at
+)
+VALUES (
+    :runId,
+    :erpCode,
+    :operation,
+    :salesforceId,
+    :pricebookEntryId,
+    :recordStatus,
+    :errorCode,
+    :errorMessage,
+    0,
+    :correlationId,
+    CURRENT_TIMESTAMP
+)]]></db:sql>
+			<db:input-parameters><![CDATA[#[{
+    runId: vars.runId default "",
+    erpCode: (vars.currentRecord default {}).erp_code default "UNKNOWN",
+    operation: vars.operation default "SYNC",
+    salesforceId: vars.salesforceProductId default null,
+    pricebookEntryId: vars.pricebookEntryId default null,
+    recordStatus: vars.recordStatus default "SUCCESS",
+    errorCode: vars.errorCode default null,
+    errorMessage: vars.errorMessage default null,
+    correlationId: vars.correlationId default ""
+}]]]></db:input-parameters>
+		</db:insert>
+	</flow>
+
+	<!-- System Layer: Update sync_run upon completion -->
+	<flow name="system-db-update-sync-run-flow" doc:id="sys-db-update-run-flow" doc:description="System Layer: Updates final counters, case number, rejects file, and COMPLETED status in sync_run table">
+		<db:update config-ref="Database_Config" doc:name="Update sync_run Metrics" doc:id="db-update-sync-run" doc:description="Updates records_read, created_count, deactivated_count, failed_count, sf_case_number, and rejects_file upon completion">
+			<db:sql><![CDATA[UPDATE sync_run
+SET records_read = :recordsRead,
+    created_count = :createdCount,
+    updated_count = :updatedCount,
+    deactivated_count = :deactivatedCount,
+    retried_count = :retriedCount,
+    failed_count = :failedCount,
+    watermark_to = :watermarkTo,
+    rejects_file = :rejectsFile,
+    sf_case_number = :sfCaseNumber,
+    email_status = :emailStatus,
+    run_status = :finalStatus,
+    completed_at = CURRENT_TIMESTAMP
+WHERE run_id = :runId]]></db:sql>
+			<db:input-parameters><![CDATA[#[{
+    recordsRead: vars.recordsRead default 0,
+    createdCount: vars.createdCount default 0,
+    updatedCount: vars.updatedCount default 0,
+    deactivatedCount: vars.deactivatedCount default 0,
+    retriedCount: vars.retriedCount default 0,
+    failedCount: vars.failedCount default 0,
+    watermarkTo: vars.maxLastModified default null,
+    rejectsFile: vars.rejectsFilePath default null,
+    sfCaseNumber: vars.sfCaseNumber default null,
+    emailStatus: vars.emailStatus default "SKIPPED",
+    finalStatus: (if ((vars.failedCount default 0) > 0) "COMPLETED_WITH_ERRORS" else "COMPLETED"),
+    runId: vars.runId default ""
+}]]]></db:input-parameters>
+		</db:update>
+	</flow>
+
+	<!-- ================================================================= -->
+	<!-- 3. SYSTEM LAYER: SALESFORCE                                       -->
+	<!-- ================================================================= -->
+
+	<!-- System Layer: Lookup Standard and Custom Price Book IDs -->
+	<flow name="system-sfdc-get-pricebooks-flow" doc:id="sys-sfdc-get-pb-flow" doc:description="System Layer: Retrieves Standard and ERP Catalog Price Book IDs from Salesforce">
+		<!-- Query Standard Price Book -->
+		<salesforce:query config-ref="Salesforce_Config" doc:name="Query Standard Price Book" doc:id="sfdc-qry-std-pb" doc:description="Queries Salesforce for the Standard Price Book">
+			<salesforce:salesforce-query><![CDATA[SELECT Id, Name, IsStandard FROM Pricebook2 WHERE IsStandard = true LIMIT 1]]></salesforce:salesforce-query>
+		</salesforce:query>
+		<set-variable value="#[payload[0].Id]" doc:name="Store Standard Price Book ID" doc:id="set-std-pb-id" variableName="standardPriceBookId" />
+		
+		<!-- Query Configured Custom Price Book -->
+		<salesforce:query config-ref="Salesforce_Config" doc:name="Query ERP Catalog Price Book" doc:id="sfdc-qry-custom-pb" doc:description="Queries Salesforce for ERP Catalog Price Book">
+			<salesforce:salesforce-query><![CDATA[SELECT Id, Name, IsActive FROM Pricebook2 WHERE Name = ':priceBookName' AND IsActive = true LIMIT 1]]></salesforce:salesforce-query>
+			<salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	priceBookName: p('salesforce.priceBookName') default "ERP Catalog Price Book"
+}]]]></salesforce:parameters>
+		</salesforce:query>
+		<set-variable value="#[payload[0].Id]" doc:name="Store Custom Price Book ID" doc:id="set-custom-pb-id" variableName="customPriceBookId" />
+		
+		<logger level="DEBUG" doc:name="Log Price Book IDs" doc:id="log-pb-ids" message="#['[SALESFORCE] Standard PB: ' ++ (vars.standardPriceBookId default 'N/A') ++ ' | Custom PB: ' ++ (vars.customPriceBookId default 'N/A')]" />
+	</flow>
+
+	<!-- System Layer: Upsert Product2 by ERP_Product_Code__c -->
+	<flow name="system-sfdc-upsert-product-flow" doc:id="sys-sfdc-upsert-prod-flow" doc:description="System Layer: Upserts Product2 in Salesforce using ERP_Product_Code__c as external ID">
+		<salesforce:upsert config-ref="Salesforce_Config" objectType="Product2" externalIdFieldName="ERP_Product_Code__c" doc:name="Upsert Product2" doc:id="sfdc-upsert-prod" doc:description="Creates or updates Product2 in Salesforce matching on ERP_Product_Code__c">
+			<salesforce:records><![CDATA[#[vars.productPayload]]]></salesforce:records>
+		</salesforce:upsert>
+		
+		<!-- Extract or Query Salesforce Product ID -->
+		<set-variable value="#[payload.items[0].id default payload[0].id default payload.id]" doc:name="Extract Salesforce Product ID" doc:id="set-sf-prod-id" variableName="salesforceProductId" />
+		<set-variable value="#[(payload.items[0].created default payload[0].created default false) as Boolean]" doc:name="Check If Created" doc:id="set-is-created" variableName="isCreated" />
+
+		<choice doc:name="Check If Product ID Resolved" doc:id="choice-sf-id">
+			<when expression="#[isEmpty(vars.salesforceProductId)]">
+				<!-- In case upsert update response did not include ID, query by ERP_Product_Code__c -->
+				<salesforce:query config-ref="Salesforce_Config" doc:name="Query Product2 ID by ERP Code" doc:id="sfdc-qry-prod-by-code">
+					<salesforce:salesforce-query><![CDATA[SELECT Id FROM Product2 WHERE ERP_Product_Code__c = ':erpCode' LIMIT 1]]></salesforce:salesforce-query>
+					<salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	erpCode: vars.currentRecord.erp_code
+}]]]></salesforce:parameters>
+				</salesforce:query>
+				<set-variable value="#[payload[0].Id]" doc:name="Set Queried Product ID" doc:id="set-qry-prod-id" variableName="salesforceProductId" />
+			</when>
+		</choice>
+	</flow>
+
+	<!-- System Layer: Ensure Standard and Custom Price Book Entries -->
+	<flow name="system-sfdc-sync-pricebook-entries-flow" doc:id="sys-sfdc-sync-pbe-flow" doc:description="System Layer: Ensures Standard Price Book entry exists, then creates or updates Custom Price Book entry">
+		<!-- 1. Check Standard Price Book Entry -->
+		<salesforce:query config-ref="Salesforce_Config" doc:name="Query Standard PricebookEntry" doc:id="sfdc-qry-std-pbe" doc:description="Checks if Standard Price Book Entry exists for this product">
+			<salesforce:salesforce-query><![CDATA[SELECT Id, UnitPrice, IsActive FROM PricebookEntry WHERE Product2Id = ':productId' AND Pricebook2Id = ':pricebookId' LIMIT 1]]></salesforce:salesforce-query>
+			<salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	productId: vars.salesforceProductId,
+	pricebookId: vars.standardPriceBookId
+}]]]></salesforce:parameters>
+		</salesforce:query>
+		
+		<choice doc:name="Choice Standard PBE Exists?" doc:id="choice-std-pbe">
+			<!-- Update existing Standard Price Book Entry -->
+			<when expression="#[!isEmpty(payload)]">
+				<salesforce:update type="PricebookEntry" config-ref="Salesforce_Config" doc:name="Update Standard PricebookEntry" doc:id="sfdc-upd-std-pbe">
+					<salesforce:records><![CDATA[#[[{
+	Id: payload[0].Id,
+	UnitPrice: vars.currentRecord.unit_price as Number,
+	IsActive: upper(vars.currentRecord.status default "ACTIVE") != "DISCONTINUED"
+}]]]]></salesforce:records>
+				</salesforce:update>
+			</when>
+			<!-- Create new Standard Price Book Entry -->
+			<otherwise>
+				<salesforce:create type="PricebookEntry" config-ref="Salesforce_Config" doc:name="Create Standard PricebookEntry" doc:id="sfdc-create-std-pbe">
+					<salesforce:records><![CDATA[#[[{
+	Product2Id: vars.salesforceProductId,
+	Pricebook2Id: vars.standardPriceBookId,
+	UnitPrice: vars.currentRecord.unit_price as Number,
+	IsActive: upper(vars.currentRecord.status default "ACTIVE") != "DISCONTINUED"
+}]]]]></salesforce:records>
+				</salesforce:create>
+			</otherwise>
+		</choice>
+
+		<!-- 2. Check Custom Price Book Entry (ERP Catalog Price Book) -->
+		<salesforce:query config-ref="Salesforce_Config" doc:name="Query Custom PricebookEntry" doc:id="sfdc-qry-custom-pbe" doc:description="Checks if Custom Price Book Entry exists for this product">
+			<salesforce:salesforce-query><![CDATA[SELECT Id, UnitPrice, IsActive FROM PricebookEntry WHERE Product2Id = ':productId' AND Pricebook2Id = ':pricebookId' LIMIT 1]]></salesforce:salesforce-query>
+			<salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	productId: vars.salesforceProductId,
+	pricebookId: vars.customPriceBookId
+}]]]></salesforce:parameters>
+		</salesforce:query>
+
+		<choice doc:name="Choice Custom PBE Exists?" doc:id="choice-custom-pbe">
+			<!-- Update existing Custom Price Book Entry -->
+			<when expression="#[!isEmpty(payload)]">
+				<set-variable value="#[payload[0].Id]" doc:name="Store Custom PBE ID" doc:id="set-upd-pbe-id" variableName="pricebookEntryId" />
+				<salesforce:update type="PricebookEntry" config-ref="Salesforce_Config" doc:name="Update Custom PricebookEntry" doc:id="sfdc-upd-custom-pbe">
+					<salesforce:records><![CDATA[#[[{
+	Id: vars.pricebookEntryId,
+	UnitPrice: vars.currentRecord.unit_price as Number,
+	IsActive: upper(vars.currentRecord.status default "ACTIVE") != "DISCONTINUED"
+}]]]]></salesforce:records>
+				</salesforce:update>
+			</when>
+			<!-- Create new Custom Price Book Entry -->
+			<otherwise>
+				<salesforce:create type="PricebookEntry" config-ref="Salesforce_Config" doc:name="Create Custom PricebookEntry" doc:id="sfdc-create-custom-pbe">
+					<salesforce:records><![CDATA[#[[{
+	Product2Id: vars.salesforceProductId,
+	Pricebook2Id: vars.customPriceBookId,
+	UnitPrice: vars.currentRecord.unit_price as Number,
+	IsActive: upper(vars.currentRecord.status default "ACTIVE") != "DISCONTINUED"
+}]]]]></salesforce:records>
+				</salesforce:create>
+				<set-variable value="#[payload.items[0].id default payload[0].id default payload.id]" doc:name="Store Created PBE ID" doc:id="set-created-pbe-id" variableName="pricebookEntryId" />
+			</otherwise>
+		</choice>
+	</flow>
+
+</mule>

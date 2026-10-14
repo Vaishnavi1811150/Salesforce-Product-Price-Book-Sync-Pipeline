@@ -1,0 +1,1342 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+	xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xsi:schemaLocation="
+		http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+		http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+		http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd
+		http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+	<munit:config name="catalog-sync-test-suite.xml" />
+
+	<!-- ================================================================= -->
+	<!-- TEST 1: Experience API POST /catalog/sync Returns 202 Accepted    -->
+	<!-- ================================================================= -->
+	<munit:test name="test-experience-post-sync-success" doc:id="munit-test-post-sync" description="Verifies POST /catalog/sync returns 202 Accepted with runId">
+		<munit:behavior>
+			<!-- Mock process orchestration flow -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Process Layer Sync">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="proc-catalog-sync-flow" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:variables>
+						<munit-tools:variable key="runId" value="#['RUN-TEST-POST-001']" />
+						<munit-tools:variable key="triggerType" value="#['MANUAL_API']" />
+						<munit-tools:variable key="scope" value="#['FULL']" />
+						<munit-tools:variable key="recordsRead" value="#[4]" />
+					</munit-tools:variables>
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<!-- Set valid request payload -->
+			<munit:set-event doc:name="Set Sync Request Event">
+				<munit:payload value='#[{ "requestedBy": "mentor@cognizant.com", "fullSync": true, "productCodes": [] }]' mediaType="application/json" />
+				<munit:variables>
+					<munit:variable key="correlationId" value="#['corr-post-001']" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="post:\catalog\sync:application\json:catalog-sync-api-config" doc:name="Call POST /catalog/sync" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-equals actual="#[vars.httpStatus as String]" expected="#['202']" message="HTTP status should be 202 Accepted" />
+			<munit-tools:assert-equals actual="#[payload.status]" expected="#['RUNNING']" message="Status should be RUNNING" />
+			<munit-tools:assert-equals actual="#[!isEmpty(payload.runId)]" expected="#[true]" message="Run ID should be generated" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 2: Experience API GET /catalog/runs/{runId} Returns 200 OK   -->
+	<!-- ================================================================= -->
+	<munit:test name="test-experience-get-run-status-success" doc:id="munit-test-get-run-success" description="Verifies GET /catalog/runs/{runId} returns 200 with stored run metrics">
+		<munit:behavior>
+			<!-- Mock DB select sync_run -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock DB Get Sync Run">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-get-sync-run-flow" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[[{
+						run_id: 'RUN-20261013-100000',
+						trigger_type: 'MANUAL',
+						requested_by: 'demo@example.com',
+						scope: 'FULL',
+						records_read: 4,
+						created_count: 2,
+						failed_count: 1,
+						run_status: 'PARTIAL_SUCCESS',
+						correlation_id: 'corr-12345',
+						started_at: |2026-10-13T10:00:00|,
+						completed_at: |2026-10-13T10:01:00|
+					}]]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<!-- Mock DB select product_sync_log -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock DB Get Product Logs">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-get-product-sync-log-flow" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[[{
+						log_seq: 1,
+						run_id: 'RUN-20261013-100000',
+						erp_code: 'PRD-AUT-140',
+						operation: 'UPSERT_SUCCESS',
+						salesforce_id: '01tbm0000010001',
+						pricebook_entry_id: '01ubm0000010001',
+						record_status: 'SUCCESS',
+						error_code: null,
+						error_message: null,
+						processed_at: |2026-10-13T10:00:30|
+					}]]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<munit:set-event doc:name="Set URI Params Event">
+				<munit:attributes value="#[{ uriParams: { runId: 'RUN-20261013-100000' } }]" />
+				<munit:variables>
+					<munit:variable key="correlationId" value="#['corr-get-001']" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="get:\catalog\runs\(runId):catalog-sync-api-config" doc:name="Call GET /catalog/runs/{runId}" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-equals actual="#[vars.httpStatus as String]" expected="#['200']" message="HTTP status should be 200" />
+			<munit-tools:assert-equals actual="#[payload.runId]" expected="#['RUN-20261013-100000']" message="Returned runId should match" />
+			<munit-tools:assert-equals actual="#[payload.status]" expected="#['PARTIAL_SUCCESS']" message="Status should be PARTIAL_SUCCESS" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 3: Experience API GET /catalog/runs/{runId} Returns 404      -->
+	<!-- ================================================================= -->
+	<munit:test name="test-experience-get-run-status-not-found" doc:id="munit-test-get-run-404" expectedErrorType="APP:NOT_FOUND" description="Verifies GET /catalog/runs/{runId} raises APP:NOT_FOUND for unknown run ID">
+		<munit:behavior>
+			<!-- Mock DB select returning empty list -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock DB Empty Result">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-get-sync-run-flow" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[[]]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<munit:set-event doc:name="Set Unknown URI Params Event">
+				<munit:attributes value="#[{ uriParams: { runId: 'RUN-NONEXISTENT' } }]" />
+				<munit:variables>
+					<munit:variable key="correlationId" value="#['corr-404-001']" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="get:\catalog\runs\(runId):catalog-sync-api-config" doc:name="Call GET /catalog/runs/{runId}" />
+		</munit:execution>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 4: Process Layer - Successful End-to-End Orchestration       -->
+	<!-- ================================================================= -->
+	<munit:test name="test-process-sync-orchestration-success" doc:id="munit-test-proc-success" description="Verifies process synchronization coordinates read, cache, upsert, and DB logs">
+		<munit:behavior>
+			<!-- Mock DB register sync run -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock DB Register Run">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-create-sync-run-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<!-- Mock Price Book IDs cache -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Get Pricebooks">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-sfdc-get-pricebooks-flow" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:variables>
+						<munit-tools:variable key="standardPriceBookId" value="#['01sbm00000K3eWsAAJ']" />
+						<munit-tools:variable key="customPriceBookId" value="#['01sbm00000KEchpAAD']" />
+					</munit-tools:variables>
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<!-- Mock DB read products with 1 valid active product -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock DB Read Products">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-read-products-flow" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[[{
+						erp_code: 'PRD-AUT-140',
+						product_name: 'Automation Controller X140',
+						description: 'Controller 240V',
+						family: 'Hardware',
+						uom: 'EA',
+						status: 'ACTIVE',
+						unit_price: 38900.00,
+						currency: 'INR',
+						last_modified: '2026-09-14 01:12:04'
+					}]]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<!-- Mock SFDC Upsert Product2 -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock SFDC Upsert">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-sfdc-upsert-product-flow" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:variables>
+						<munit-tools:variable key="salesforceProductId" value="#['01tbm0000010001']" />
+					</munit-tools:variables>
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<!-- Mock SFDC Sync Pricebook Entries -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock SFDC Sync PBE">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-sfdc-sync-pricebook-entries-flow" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:variables>
+						<munit-tools:variable key="customPricebookEntryId" value="#['01ubm0000010001']" />
+					</munit-tools:variables>
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<!-- Mock DB Log Product Sync -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock DB Log Product">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-log-product-sync-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<!-- Mock DB Update Sync Run -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock DB Update Run">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-update-sync-run-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<!-- Mock Email Send Summary -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Send Email">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="sys-email-send-summary-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<munit:set-event doc:name="Set Event Context">
+				<munit:variables>
+					<munit:variable key="runId" value="#['RUN-TEST-001']" />
+					<munit:variable key="correlationId" value="#['corr-001']" />
+					<munit:variable key="scope" value="#['FULL']" />
+					<munit:variable key="productCodes" value="#[[]]" />
+					<munit:variable key="triggerType" value="#['MANUAL']" />
+					<munit:variable key="requestedBy" value="#['tester@cognizant.com']" />
+					<munit:variable key="watermarkFrom" value="#['1971-01-01 00:00:00']" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="process-catalog-sync-flow" doc:name="Call Process Flow" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-equals actual="#[vars.recordsRead]" expected="#[1]" message="Records read should be 1" />
+			<munit-tools:assert-equals actual="#[vars.failedCount]" expected="#[0]" message="Failed count should be 0" />
+			<munit-tools:assert-equals actual="#[vars.updatedCount + vars.createdCount]" expected="#[1]" message="One record should be processed" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 5: Record Validation - Rejects PRD-CBL-007 (Null Name / -Price) -->
+	<!-- ================================================================= -->
+	<munit:test name="test-record-validation-rejects-invalid-product" doc:id="munit-test-val-reject" description="Verifies missing name and negative price are caught and categorized as VALIDATION failure">
+		<munit:behavior>
+			<!-- Mock DB register sync run -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock DB Register Run">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-create-sync-run-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<!-- Mock Pricebooks cache -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Pricebooks">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-sfdc-get-pricebooks-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<!-- Mock DB read returning invalid PRD-CBL-007 -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock DB Read Invalid Product">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-read-products-flow" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[[{
+						erp_code: 'PRD-CBL-007',
+						product_name: null,
+						description: 'Accessory cable',
+						family: 'Hardware',
+						uom: 'EA',
+						status: 'ACTIVE',
+						unit_price: -120.00,
+						currency: 'INR',
+						last_modified: '2026-09-14 02:18:39'
+					}]]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<!-- Mock DB log product -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock DB Log Product">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-log-product-sync-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<!-- Mock Rejects CSV file write -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Write Rejects CSV">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="sys-file-write-rejects-csv-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<!-- Mock Salesforce Case creation -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock SF Case Creation">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="sys-sfdc-create-exception-case-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<!-- Mock DB Update Run -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock DB Update Run">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-update-sync-run-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<!-- Mock Send Email -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Send Email">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="sys-email-send-summary-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<munit:set-event doc:name="Set Event Context">
+				<munit:variables>
+					<munit:variable key="runId" value="#['RUN-TEST-VAL-001']" />
+					<munit:variable key="correlationId" value="#['corr-val-001']" />
+					<munit:variable key="scope" value="#['FULL']" />
+					<munit:variable key="productCodes" value="#[[]]" />
+					<munit:variable key="triggerType" value="#['MANUAL']" />
+					<munit:variable key="requestedBy" value="#['tester@cognizant.com']" />
+					<munit:variable key="watermarkFrom" value="#['1971-01-01 00:00:00']" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="process-catalog-sync-flow" doc:name="Call Process Flow" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-equals actual="#[vars.recordsRead]" expected="#[1]" message="Records read should be 1" />
+			<munit-tools:assert-equals actual="#[vars.failedCount]" expected="#[1]" message="Failed count should be 1" />
+			<munit-tools:assert-equals actual="#[sizeOf(vars.rejectRecords)]" expected="#[1]" message="Reject records list should have 1 item" />
+			<munit-tools:assert-equals actual="#[vars.rejectRecords[0].erpCode]" expected="#['PRD-CBL-007']" message="Rejected product should be PRD-CBL-007" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 6: Discontinued Product Mapped to IsActive=false             -->
+	<!-- ================================================================= -->
+	<munit:test name="test-discontinued-product-mapped-inactive" doc:id="munit-test-discont" description="Verifies DISCONTINUED status is mapped to IsActive=false and counted as deactivated">
+		<munit:behavior>
+			<!-- Mock DB register sync run -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock DB Register Run">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-create-sync-run-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<!-- Mock Pricebooks cache -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Pricebooks">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-sfdc-get-pricebooks-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<!-- Mock DB read returning discontinued PRD-AUT-090 -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock DB Read Discontinued Product">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-read-products-flow" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[[{
+						erp_code: 'PRD-AUT-090',
+						product_name: 'Automation Controller X090',
+						description: 'Discontinued automation controller',
+						family: 'Hardware',
+						uom: 'EA',
+						status: 'DISCONTINUED',
+						unit_price: 21500.00,
+						currency: 'INR',
+						last_modified: '2026-09-14 02:05:11'
+					}]]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<!-- Mock SFDC Upsert Product2 -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock SFDC Upsert">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-sfdc-upsert-product-flow" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:variables>
+						<munit-tools:variable key="salesforceProductId" value="#['01tbm0000010090']" />
+					</munit-tools:variables>
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<!-- Mock SFDC Sync Pricebook Entries -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock SFDC Sync PBE">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-sfdc-sync-pricebook-entries-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<!-- Mock DB log product -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock DB Log Product">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-log-product-sync-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<!-- Mock DB Update Run -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock DB Update Run">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-update-sync-run-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<!-- Mock Send Email -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Send Email">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="sys-email-send-summary-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<munit:set-event doc:name="Set Event Context">
+				<munit:variables>
+					<munit:variable key="runId" value="#['RUN-TEST-DISC-001']" />
+					<munit:variable key="correlationId" value="#['corr-disc-001']" />
+					<munit:variable key="scope" value="#['FULL']" />
+					<munit:variable key="productCodes" value="#[[]]" />
+					<munit:variable key="triggerType" value="#['MANUAL']" />
+					<munit:variable key="requestedBy" value="#['tester@cognizant.com']" />
+					<munit:variable key="watermarkFrom" value="#['1971-01-01 00:00:00']" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="process-catalog-sync-flow" doc:name="Call Process Flow" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-equals actual="#[vars.deactivatedCount]" expected="#[1]" message="Deactivated count should be 1" />
+			<munit-tools:assert-equals actual="#[vars.failedCount]" expected="#[0]" message="Failed count should be 0" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 7: Salesforce Exception Case Flow Populates CaseNumber       -->
+	<!-- ================================================================= -->
+	<munit:test name="test-system-sfdc-create-exception-case" doc:id="munit-test-sfdc-case" description="Verifies Salesforce Case creation and CaseNumber retrieval">
+		<munit:behavior>
+			<!-- Mock SFDC Create Case -->
+			<munit-tools:mock-when processor="salesforce:create" doc:name="Mock SFDC Create Case">
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[[{ id: '500bm000003N5G0AAK', success: true }]]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<!-- Mock SFDC Query CaseNumber -->
+			<munit-tools:mock-when processor="salesforce:query" doc:name="Mock SFDC Query CaseNumber">
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[[{ CaseNumber: '00001027' }]]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<munit:set-event doc:name="Set Case Context Variables">
+				<munit:variables>
+					<munit:variable key="runId" value="#['RUN-TEST-CASE-001']" />
+					<munit:variable key="failedCount" value="#[1]" />
+					<munit:variable key="triggerType" value="#['MANUAL']" />
+					<munit:variable key="correlationId" value="#['corr-case-001']" />
+					<munit:variable key="rejectsFileName" value="#['CATALOG_REJECTS_RUN-TEST-CASE-001.csv']" />
+					<munit:variable key="rejectRecords" value="#[[{
+						erpCode: 'PRD-CBL-007',
+						errorCode: 'ERR_VALIDATION_FAILED',
+						errorMessage: 'Missing Product Name'
+					}]]" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="sys-sfdc-create-exception-case-flow" doc:name="Call Create Exception Case Flow" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-equals actual="#[vars.sfCaseNumber]" expected="#['00001027']" message="Case number should be 00001027" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 8: Process Coordinator - Concurrency Conflict (409)          -->
+	<!-- ================================================================= -->
+	<munit:test name="test-proc-catalog-sync-concurrency-conflict" doc:id="munit-test-concurrency" expectedErrorType="APP:CONCURRENCY_CONFLICT" description="Verifies concurrency check raises APP:CONCURRENCY_CONFLICT when active run exists">
+		<munit:behavior>
+			<!-- Mock Active Run Check returning active run -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Active Run Check Active">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-check-active-run-flow" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:variables>
+						<munit-tools:variable key="activeRunRecords" value="#[[{ run_id: 'RUN-IN-PROGRESS-999' }]]" />
+					</munit-tools:variables>
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<munit:set-event doc:name="Set Valid Event">
+				<munit:payload value='#[{ "requestedBy": "tester@cognizant.com", "fullSync": true }]' mediaType="application/java" />
+				<munit:variables>
+					<munit:variable key="correlationId" value="#['corr-conc-001']" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="proc-catalog-sync-flow" doc:name="Call Proc Sync Flow" />
+		</munit:execution>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 9: Process Coordinator - Bad Request Validation (400)        -->
+	<!-- ================================================================= -->
+	<munit:test name="test-proc-catalog-sync-bad-request" doc:id="munit-test-bad-request" expectedErrorType="APP:BAD_REQUEST" description="Verifies invalid payload types raise APP:BAD_REQUEST">
+		<munit:execution>
+			<munit:set-event doc:name="Set Invalid Event">
+				<!-- fullSync must be boolean, passing invalid string should fail validation -->
+				<munit:payload value='#[{ "requestedBy": "tester@cognizant.com", "fullSync": "invalid_boolean_string" }]' mediaType="application/java" />
+				<munit:variables>
+					<munit:variable key="correlationId" value="#['corr-bad-001']" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="proc-catalog-sync-flow" doc:name="Call Proc Sync Flow" />
+		</munit:execution>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 10: Process Coordinator - Successful Scope Resolution        -->
+	<!-- ================================================================= -->
+	<munit:test name="test-proc-catalog-sync-success-scope" doc:id="munit-test-scope-res" description="Verifies parameter normalization and core sync trigger">
+		<munit:behavior>
+			<!-- Mock Active Run Check (no conflict) -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Active Run Check Clear">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-check-active-run-flow" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:variables>
+						<munit-tools:variable key="activeRunRecords" value="#[[]]" />
+					</munit-tools:variables>
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<!-- Mock Core Sync flow -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Core Sync">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="process-catalog-sync-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<munit:set-event doc:name="Set Event with Product Codes">
+				<munit:payload value='#[{ "requestedBy": "tester@cognizant.com", "fullSync": false, "productCodes": ["PRD-AUT-140"] }]' mediaType="application/java" />
+				<munit:variables>
+					<munit:variable key="correlationId" value="#['corr-scope-001']" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="proc-catalog-sync-flow" doc:name="Call Proc Sync Flow" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-equals actual="#[vars.scope]" expected="#['PARTIAL']" message="Scope should be resolved to PARTIAL" />
+			<munit-tools:assert-equals actual="#[!isEmpty(vars.runId)]" expected="#[true]" message="Run ID should be generated" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 11: System Layer - Rejects CSV Generation Flow               -->
+	<!-- ================================================================= -->
+	<munit:test name="test-system-file-write-rejects-csv" doc:id="munit-test-write-csv" description="Verifies CSV formatting and rejects file path creation">
+		<munit:behavior>
+			<!-- Mock File write -->
+			<munit-tools:mock-when processor="file:write" doc:name="Mock File Write" />
+		</munit:behavior>
+		<munit:execution>
+			<munit:set-event doc:name="Set Rejects Context">
+				<munit:variables>
+					<munit:variable key="runId" value="#['RUN-TEST-CSV-001']" />
+					<munit:variable key="rejectRecords" value="#[[{
+						runId: 'RUN-TEST-CSV-001',
+						erpCode: 'PRD-CBL-007',
+						productName: 'Accessory Cable',
+						family: 'Hardware',
+						operation: 'VALIDATION',
+						errorCode: 'ERR_VALIDATION_FAILED',
+						errorMessage: 'Missing Product Name',
+						retryCount: 0,
+						timestamp: now() as String
+					}]]" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="sys-file-write-rejects-csv-flow" doc:name="Call Write Rejects CSV Flow" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-equals actual="#[vars.rejectsFileName]" expected="#['CATALOG_REJECTS_RUN-TEST-CSV-001.csv']" message="Rejects file name should follow pattern" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 12: System Layer - Email Summary Flow                        -->
+	<!-- ================================================================= -->
+	<munit:test name="test-system-email-send-summary" doc:id="munit-test-email-summary" description="Verifies HTML summary generation from DW template">
+		<munit:execution>
+			<munit:set-event doc:name="Set Email Context">
+				<munit:variables>
+					<munit:variable key="runId" value="#['RUN-TEST-EMAIL-001']" />
+					<munit:variable key="triggerType" value="#['MANUAL']" />
+					<munit:variable key="scope" value="#['FULL']" />
+					<munit:variable key="recordsRead" value="#[4]" />
+					<munit:variable key="createdCount" value="#[2]" />
+					<munit:variable key="updatedCount" value="#[1]" />
+					<munit:variable key="deactivatedCount" value="#[1]" />
+					<munit:variable key="failedCount" value="#[0]" />
+					<munit:variable key="rejectsFileName" value="#['N/A']" />
+					<munit:variable key="sfCaseNumber" value="#['N/A']" />
+					<munit:variable key="correlationId" value="#['corr-email-001']" />
+					<munit:variable key="runStartTime" value="#[now()]" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="sys-email-send-summary-flow" doc:name="Call Send Email Summary Flow" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-equals actual="#[vars.emailStatus]" expected="#['SKIPPED_NO_SMTP']" message="Email status should be SKIPPED_NO_SMTP when smtp.enabled is false" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 13: Experience Layer - Scheduled Sync Trigger Flow             -->
+	<!-- ================================================================= -->
+	<munit:test name="test-experience-scheduled-sync-trigger" doc:id="munit-test-sched-trigger" description="Verifies scheduler flow initializes DELTA scope and delegates to proc-sync">
+		<munit:behavior>
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Proc Sync Flow">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="proc-catalog-sync-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<flow-ref name="experience-scheduled-sync-trigger-flow" doc:name="Call Scheduled Trigger Flow" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-equals actual="#[vars.triggerType]" expected="#['SCHEDULED']" message="Trigger type should be SCHEDULED" />
+			<munit-tools:assert-equals actual="#[vars.scope]" expected="#['DELTA']" message="Scope should be DELTA" />
+			<munit-tools:assert-equals actual="#[vars.requestedBy]" expected="#['SYSTEM_SCHEDULER']" message="Requested by should be SYSTEM_SCHEDULER" />
+			<munit-tools:assert-that expression="#[vars.runId]" is="#[MunitTools::notNullValue()]" message="Run ID should not be null" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 14: System Layer - Salesforce Get Price Books Flow            -->
+	<!-- ================================================================= -->
+	<munit:test name="test-system-sfdc-get-pricebooks" doc:id="munit-test-get-pbs" description="Verifies retrieval and storage of Standard and Custom Price Book IDs">
+		<munit:behavior>
+			<munit-tools:mock-when processor="salesforce:query" doc:name="Mock Query Standard PB">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="doc:name" whereValue="Query Standard Price Book" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[[{ Id: '01sbm0000000001', Name: 'Standard Price Book', IsStandard: true }]]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="salesforce:query" doc:name="Mock Query Custom PB">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="doc:name" whereValue="Query ERP Catalog Price Book" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[[{ Id: '01ubm0000000002', Name: 'ERP Catalog Price Book', IsActive: true }]]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<flow-ref name="system-sfdc-get-pricebooks-flow" doc:name="Call Get Pricebooks Flow" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-equals actual="#[vars.standardPriceBookId]" expected="#['01sbm0000000001']" message="Standard Price Book ID should match" />
+			<munit-tools:assert-equals actual="#[vars.customPriceBookId]" expected="#['01ubm0000000002']" message="Custom Price Book ID should match" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 15: System Layer - Salesforce Upsert Product2 (Created)       -->
+	<!-- ================================================================= -->
+	<munit:test name="test-system-sfdc-upsert-product-created" doc:id="munit-test-upsert-prod" description="Verifies Product2 upsert creates product and extracts ID">
+		<munit:behavior>
+			<munit-tools:mock-when processor="salesforce:upsert" doc:name="Mock SFDC Upsert">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="doc:name" whereValue="Upsert Product2" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[[{ id: '01tbm0000000001', created: true, success: true }]]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<munit:set-event doc:name="Set Product Payload">
+				<munit:variables>
+					<munit:variable key="productPayload" value="#[[{ Name: 'Automation Controller', ERP_Product_Code__c: 'PRD-AUT-140' }]]" />
+					<munit:variable key="currentRecord" value="#[{ erp_code: 'PRD-AUT-140' }]" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="system-sfdc-upsert-product-flow" doc:name="Call Upsert Product Flow" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-equals actual="#[vars.salesforceProductId]" expected="#['01tbm0000000001']" message="Salesforce Product ID should be extracted" />
+			<munit-tools:assert-equals actual="#[vars.isCreated]" expected="#[true]" message="isCreated should be true" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 16: System Layer - Salesforce Upsert Product2 (Fallback Query)-->
+	<!-- ================================================================= -->
+	<munit:test name="test-system-sfdc-upsert-product-fallback-query" doc:id="munit-test-upsert-fallback" description="Verifies fallback query executes when upsert response omits ID">
+		<munit:behavior>
+			<munit-tools:mock-when processor="salesforce:upsert" doc:name="Mock SFDC Upsert (No ID)">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="doc:name" whereValue="Upsert Product2" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[[{ success: true }]]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="salesforce:query" doc:name="Mock Fallback Query Product2 ID">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="doc:name" whereValue="Query Product2 ID by ERP Code" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[[{ Id: '01tbm0000000099' }]]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<munit:set-event doc:name="Set Fallback Context">
+				<munit:variables>
+					<munit:variable key="productPayload" value="#[[{ Name: 'Updated Controller', ERP_Product_Code__c: 'PRD-AUT-090' }]]" />
+					<munit:variable key="currentRecord" value="#[{ erp_code: 'PRD-AUT-090' }]" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="system-sfdc-upsert-product-flow" doc:name="Call Upsert Product Flow" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-equals actual="#[vars.salesforceProductId]" expected="#['01tbm0000000099']" message="Queried fallback Product ID should be stored" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 17: System Layer - Sync Price Book Entries (Update Branch)    -->
+	<!-- ================================================================= -->
+	<munit:test name="test-system-sfdc-sync-pricebook-entries-update" doc:id="munit-test-pbe-update" description="Verifies existing Standard and Custom PricebookEntries are updated">
+		<munit:behavior>
+			<munit-tools:mock-when processor="salesforce:query" doc:name="Mock Query Std PBE (Found)">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="doc:name" whereValue="Query Standard PricebookEntry" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[[{ Id: '01sPBE00001', UnitPrice: 100.0, IsActive: true }]]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="salesforce:update" doc:name="Mock Update Std PBE">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="doc:name" whereValue="Update Standard PricebookEntry" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="salesforce:query" doc:name="Mock Query Custom PBE (Found)">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="doc:name" whereValue="Query Custom PricebookEntry" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[[{ Id: '01uPBE00002', UnitPrice: 100.0, IsActive: true }]]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="salesforce:update" doc:name="Mock Update Custom PBE">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="doc:name" whereValue="Update Custom PricebookEntry" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<munit:set-event doc:name="Set PBE Update Context">
+				<munit:variables>
+					<munit:variable key="salesforceProductId" value="#['01tbm0000000001']" />
+					<munit:variable key="standardPriceBookId" value="#['01sbm0000000001']" />
+					<munit:variable key="customPriceBookId" value="#['01ubm0000000002']" />
+					<munit:variable key="currentRecord" value="#[{ unit_price: 150.0, status: 'ACTIVE' }]" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="system-sfdc-sync-pricebook-entries-flow" doc:name="Call Sync PBE Flow" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-equals actual="#[vars.pricebookEntryId]" expected="#['01uPBE00002']" message="Custom PricebookEntry ID should be set" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 18: System Layer - Sync Price Book Entries (Create Branch)    -->
+	<!-- ================================================================= -->
+	<munit:test name="test-system-sfdc-sync-pricebook-entries-create" doc:id="munit-test-pbe-create" description="Verifies new Standard and Custom PricebookEntries are created">
+		<munit:behavior>
+			<munit-tools:mock-when processor="salesforce:query" doc:name="Mock Query Std PBE (Empty)">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="doc:name" whereValue="Query Standard PricebookEntry" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[[]]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="salesforce:create" doc:name="Mock Create Std PBE">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="doc:name" whereValue="Create Standard PricebookEntry" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[[{ id: '01sNewStd01', success: true }]]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="salesforce:query" doc:name="Mock Query Custom PBE (Empty)">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="doc:name" whereValue="Query Custom PricebookEntry" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[[]]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="salesforce:create" doc:name="Mock Create Custom PBE">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="doc:name" whereValue="Create Custom PricebookEntry" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[[{ id: '01uNewCust02', success: true }]]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<munit:set-event doc:name="Set PBE Create Context">
+				<munit:variables>
+					<munit:variable key="salesforceProductId" value="#['01tbm0000000001']" />
+					<munit:variable key="standardPriceBookId" value="#['01sbm0000000001']" />
+					<munit:variable key="customPriceBookId" value="#['01ubm0000000002']" />
+					<munit:variable key="currentRecord" value="#[{ unit_price: 250.0, status: 'DISCONTINUED' }]" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="system-sfdc-sync-pricebook-entries-flow" doc:name="Call Sync PBE Flow" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-equals actual="#[vars.pricebookEntryId]" expected="#['01uNewCust02']" message="Created Custom PricebookEntry ID should be set" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 19: System Layer - Database Flows Unit Tests                  -->
+	<!-- ================================================================= -->
+	<munit:test name="test-system-db-operations" doc:id="munit-test-sys-db-ops" description="Verifies all system database query and audit flows">
+		<munit:behavior>
+			<munit-tools:mock-when processor="db:select" doc:name="Mock DB Select">
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[[{ erp_code: 'PRD-TEST-01', product_name: 'Test', unit_price: 100.0 }]]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="db:insert" doc:name="Mock DB Insert" />
+			<munit-tools:mock-when processor="db:update" doc:name="Mock DB Update" />
+		</munit:behavior>
+		<munit:execution>
+			<munit:set-event doc:name="Set DB Context">
+				<munit:variables>
+					<munit:variable key="runId" value="#['RUN-SYS-DB-001']" />
+					<munit:variable key="scope" value="#['FULL']" />
+					<munit:variable key="triggerType" value="#['MANUAL']" />
+					<munit:variable key="requestedBy" value="#['admin@example.com']" />
+					<munit:variable key="correlationId" value="#['corr-db-001']" />
+					<munit:variable key="watermarkFrom" value="#['1971-01-01 00:00:00']" />
+					<munit:variable key="recordsRead" value="#[1]" />
+					<munit:variable key="createdCount" value="#[1]" />
+					<munit:variable key="updatedCount" value="#[0]" />
+					<munit:variable key="deactivatedCount" value="#[0]" />
+					<munit:variable key="failedCount" value="#[0]" />
+					<munit:variable key="currentRecord" value="#[{ erp_code: 'PRD-TEST-01' }]" />
+					<munit:variable key="operation" value="#['INSERT']" />
+					<munit:variable key="recordStatus" value="#['SUCCESS']" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="system-db-check-active-run-flow" doc:name="Call Check Active Run" />
+			<flow-ref name="system-db-create-sync-run-flow" doc:name="Call Create Sync Run" />
+			<flow-ref name="system-db-read-products-flow" doc:name="Call Read Products" />
+			<flow-ref name="system-db-log-product-sync-flow" doc:name="Call Log Product Sync" />
+			<flow-ref name="system-db-get-sync-run-flow" doc:name="Call Get Sync Run" />
+			<flow-ref name="system-db-get-product-sync-log-flow" doc:name="Call Get Product Sync Log" />
+			<flow-ref name="system-db-update-sync-run-flow" doc:name="Call Update Sync Run" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-that expression="#[payload]" is="#[MunitTools::notNullValue()]" message="Payload should not be null after database reads" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 20: Experience Layer - APIKit Router and Console Flow         -->
+	<!-- ================================================================= -->
+	<munit:test name="test-exp-apikit-main-and-console" doc:id="munit-test-exp-main-console" description="Verifies main API entry point and console invocation">
+		<munit:behavior>
+			<munit-tools:mock-when processor="apikit:router" doc:name="Mock APIKit Router" />
+			<munit-tools:mock-when processor="apikit:console" doc:name="Mock APIKit Console" />
+		</munit:behavior>
+		<munit:execution>
+			<munit:set-event doc:name="Set APIKit Request Event">
+				<munit:attributes value="#[{ headers: { 'x-correlation-id': 'corr-api-main-001' } }]" />
+			</munit:set-event>
+			<flow-ref name="exp-catalog-sync-api-main" doc:name="Call Main API Route" />
+			<flow-ref name="exp-catalog-sync-api-console" doc:name="Call API Console" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-equals actual="#[vars.correlationId]" expected="#['corr-api-main-001']" message="Correlation ID should be captured from header" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 21: Global Error Handler - Bad Request (400)                  -->
+	<!-- ================================================================= -->
+	<munit:test name="test-global-error-handler-bad-request" doc:id="munit-test-err-400" expectedErrorType="APIKIT:BAD_REQUEST" description="Verifies global error handler processes APIKIT:BAD_REQUEST">
+		<munit:behavior>
+			<munit-tools:mock-when processor="apikit:router" doc:name="Mock Router Throw 400">
+				<munit-tools:then-return>
+					<munit-tools:error typeId="APIKIT:BAD_REQUEST" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<flow-ref name="exp-catalog-sync-api-main" doc:name="Call Main Flow with Error" />
+		</munit:execution>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 22: Global Error Handler - Not Found (404)                    -->
+	<!-- ================================================================= -->
+	<munit:test name="test-global-error-handler-not-found" doc:id="munit-test-err-404" expectedErrorType="APIKIT:NOT_FOUND" description="Verifies global error handler processes APIKIT:NOT_FOUND">
+		<munit:behavior>
+			<munit-tools:mock-when processor="apikit:router" doc:name="Mock Router Throw 404">
+				<munit-tools:then-return>
+					<munit-tools:error typeId="APIKIT:NOT_FOUND" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<flow-ref name="exp-catalog-sync-api-main" doc:name="Call Main Flow with Error" />
+		</munit:execution>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 23: Global Error Handler - Method Not Allowed (405)           -->
+	<!-- ================================================================= -->
+	<munit:test name="test-global-error-handler-method-not-allowed" doc:id="munit-test-err-405" expectedErrorType="APIKIT:METHOD_NOT_ALLOWED" description="Verifies global error handler processes APIKIT:METHOD_NOT_ALLOWED">
+		<munit:behavior>
+			<munit-tools:mock-when processor="apikit:router" doc:name="Mock Router Throw 405">
+				<munit-tools:then-return>
+					<munit-tools:error typeId="APIKIT:METHOD_NOT_ALLOWED" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<flow-ref name="exp-catalog-sync-api-main" doc:name="Call Main Flow with Error" />
+		</munit:execution>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 24: Global Error Handler - Concurrency Conflict (409)         -->
+	<!-- ================================================================= -->
+	<munit:test name="test-global-error-handler-concurrency-conflict" doc:id="munit-test-err-409" expectedErrorType="APP:CONCURRENCY_CONFLICT" description="Verifies global error handler processes APP:CONCURRENCY_CONFLICT">
+		<munit:behavior>
+			<munit-tools:mock-when processor="apikit:router" doc:name="Mock Router Throw 409">
+				<munit-tools:then-return>
+					<munit-tools:error typeId="APP:CONCURRENCY_CONFLICT" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<flow-ref name="exp-catalog-sync-api-main" doc:name="Call Main Flow with Error" />
+		</munit:execution>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 25: Global Error Handler - Unsupported Media Type (415)       -->
+	<!-- ================================================================= -->
+	<munit:test name="test-global-error-handler-unsupported-media-type" doc:id="munit-test-err-415" expectedErrorType="APIKIT:UNSUPPORTED_MEDIA_TYPE" description="Verifies global error handler processes APIKIT:UNSUPPORTED_MEDIA_TYPE">
+		<munit:behavior>
+			<munit-tools:mock-when processor="apikit:router" doc:name="Mock Router Throw 415">
+				<munit-tools:then-return>
+					<munit-tools:error typeId="APIKIT:UNSUPPORTED_MEDIA_TYPE" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<flow-ref name="exp-catalog-sync-api-main" doc:name="Call Main Flow with Error" />
+		</munit:execution>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 26: Global Error Handler - Internal Server Error (500)        -->
+	<!-- ================================================================= -->
+	<munit:test name="test-global-error-handler-internal-server-error" doc:id="munit-test-err-500" expectedErrorType="MULE:ANY" description="Verifies global error handler processes ANY unhandled errors">
+		<munit:behavior>
+			<munit-tools:mock-when processor="apikit:router" doc:name="Mock Router Throw ANY Error">
+				<munit-tools:then-return>
+					<munit-tools:error typeId="MULE:UNKNOWN" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<flow-ref name="exp-catalog-sync-api-main" doc:name="Call Main Flow with Error" />
+		</munit:execution>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 27: Global Error Handler - Not Acceptable (406)               -->
+	<!-- ================================================================= -->
+	<munit:test name="test-global-error-handler-not-acceptable" doc:id="munit-test-err-406" expectedErrorType="APIKIT:NOT_ACCEPTABLE" description="Verifies global error handler processes APIKIT:NOT_ACCEPTABLE">
+		<munit:behavior>
+			<munit-tools:mock-when processor="apikit:router" doc:name="Mock Router Throw 406">
+				<munit-tools:then-return>
+					<munit-tools:error typeId="APIKIT:NOT_ACCEPTABLE" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<flow-ref name="exp-catalog-sync-api-main" doc:name="Call Main Flow with Error" />
+		</munit:execution>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 28: Process Layer - Scope DELTA Watermark Retrieval           -->
+	<!-- ================================================================= -->
+	<munit:test name="test-proc-catalog-sync-delta-watermark" doc:id="munit-test-proc-delta-wm" description="Verifies DELTA scope retrieves watermark from Object Store">
+		<munit:behavior>
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Active Run Check">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-check-active-run-flow" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:variables>
+						<munit-tools:variable key="activeRunRecords" value="#[[]]" />
+					</munit-tools:variables>
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="os:retrieve" doc:name="Mock OS Retrieve Watermark">
+				<munit-tools:then-return>
+					<munit-tools:variables>
+						<munit-tools:variable key="storedWatermark" value="#['2026-10-10 00:00:00']" />
+					</munit-tools:variables>
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Core Sync">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="process-catalog-sync-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<munit:set-event doc:name="Set Event with DELTA Scope">
+				<munit:payload value='#[{ "requestedBy": "tester@cognizant.com", "fullSync": false }]' mediaType="application/java" />
+				<munit:variables>
+					<munit:variable key="scope" value="#['DELTA']" />
+					<munit:variable key="productCodes" value="#[[]]" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="proc-catalog-sync-flow" doc:name="Call Proc Sync Flow" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-equals actual="#[vars.scope]" expected="#['DELTA']" message="Scope should resolve to DELTA" />
+			<munit-tools:assert-equals actual="#[vars.watermarkFrom]" expected="#['2026-10-10 00:00:00']" message="WatermarkFrom should be retrieved from Object Store" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 29: Process Layer - DELTA Watermark Advancement & Created Count-->
+	<!-- ================================================================= -->
+	<munit:test name="test-process-catalog-sync-delta-watermark-advancement" doc:id="munit-test-adv-wm" description="Verifies successful DELTA run advances watermark in Object Store">
+		<munit:behavior>
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Create Run">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-create-sync-run-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Read Products">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-read-products-flow" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[[{
+						erp_code: 'PRD-NEW-001',
+						product_name: 'New Hardware Device',
+						description: 'Brand new device',
+						family: 'Hardware',
+						uom: 'Each',
+						status: 'ACTIVE',
+						unit_price: 199.99,
+						currency: 'INR',
+						last_modified: '2026-10-13 18:00:00'
+					}]]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Get Pricebooks">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-sfdc-get-pricebooks-flow" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:variables>
+						<munit-tools:variable key="standardPriceBookId" value="#['01sbm0000000001']" />
+						<munit-tools:variable key="customPriceBookId" value="#['01ubm0000000002']" />
+					</munit-tools:variables>
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Upsert Product (isCreated true)">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-sfdc-upsert-product-flow" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:variables>
+						<munit-tools:variable key="salesforceProductId" value="#['01tbm0000000099']" />
+						<munit-tools:variable key="isCreated" value="#[true]" />
+					</munit-tools:variables>
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Sync PBE">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-sfdc-sync-pricebook-entries-flow" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:variables>
+						<munit-tools:variable key="pricebookEntryId" value="#['01uPBE000099']" />
+					</munit-tools:variables>
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Log Product DB">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-log-product-sync-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="os:store" doc:name="Mock Store Watermark" />
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Email Summary">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="sys-email-send-summary-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Update Run DB">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-update-sync-run-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<munit:set-event doc:name="Set Event Context">
+				<munit:variables>
+					<munit:variable key="runId" value="#['RUN-TEST-DELTA-001']" />
+					<munit:variable key="correlationId" value="#['corr-delta-001']" />
+					<munit:variable key="scope" value="#['DELTA']" />
+					<munit:variable key="productCodes" value="#[[]]" />
+					<munit:variable key="triggerType" value="#['SCHEDULED']" />
+					<munit:variable key="requestedBy" value="#['SYSTEM_SCHEDULER']" />
+					<munit:variable key="watermarkFrom" value="#['2026-10-10 00:00:00']" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="process-catalog-sync-flow" doc:name="Call Process Flow" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-equals actual="#[vars.createdCount]" expected="#[1]" message="Created count should be 1" />
+			<munit-tools:assert-equals actual="#[vars.failedCount]" expected="#[0]" message="Failed count should be 0" />
+			<munit-tools:assert-equals actual="#[vars.maxLastModified]" expected="#['2026-10-13 18:00:00']" message="Max last modified should be computed" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 30: Process Layer - Record Error Handler & Alert Threshold    -->
+	<!-- ================================================================= -->
+	<munit:test name="test-process-catalog-sync-record-exception-and-alert" doc:id="munit-test-rec-err-alert" description="Verifies individual record error handling catch and high failure alert">
+		<munit:behavior>
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Create Run">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-create-sync-run-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Read Products">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-read-products-flow" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[(1 to 6) map (i) -> {
+						erp_code: 'PRD-ERR-' ++ (i as String),
+						product_name: 'Failing Product ' ++ (i as String),
+						family: 'Hardware',
+						uom: 'Each',
+						status: 'ACTIVE',
+						unit_price: 50.0,
+						currency: 'INR',
+						last_modified: '2026-10-13 18:00:00'
+					}]" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Get Pricebooks">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-sfdc-get-pricebooks-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<!-- Force runtime exception inside the record processing try block -->
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Upsert Throw Exception">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-sfdc-upsert-product-flow" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+					<munit-tools:error typeId="MULE:UNKNOWN" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Log Product DB">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-log-product-sync-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock File Write Rejects CSV">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="sys-file-write-rejects-csv-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock SFDC Case">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="sys-sfdc-create-exception-case-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Email Summary">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="sys-email-send-summary-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+			<munit-tools:mock-when processor="flow-ref" doc:name="Mock Update Run DB">
+				<munit-tools:with-attributes>
+					<munit-tools:with-attribute attributeName="name" whereValue="system-db-update-sync-run-flow" />
+				</munit-tools:with-attributes>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<munit:set-event doc:name="Set Event Context">
+				<munit:variables>
+					<munit:variable key="runId" value="#['RUN-TEST-ERR-001']" />
+					<munit:variable key="correlationId" value="#['corr-err-001']" />
+					<munit:variable key="scope" value="#['FULL']" />
+					<munit:variable key="productCodes" value="#[[]]" />
+					<munit:variable key="triggerType" value="#['MANUAL']" />
+					<munit:variable key="requestedBy" value="#['tester@cognizant.com']" />
+					<!-- Preset failedCount to 5 so adding 1 makes it 6 (>5 alert threshold) -->
+					<munit:variable key="failedCount" value="#[5]" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="process-catalog-sync-flow" doc:name="Call Process Flow" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-equals actual="#[vars.recordStatus]" expected="#['FAILED']" message="Record status should be FAILED" />
+			<munit-tools:assert-equals actual="#[vars.operation]" expected="#['ERROR']" message="Operation should be ERROR" />
+			<munit-tools:assert-equals actual="#[vars.failedCount]" expected="#[6]" message="Failed count should be 6" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 31: System Layer - File Write Rejects CSV Error Handling      -->
+	<!-- ================================================================= -->
+	<munit:test name="test-system-file-write-rejects-csv-error" doc:id="munit-test-csv-err" description="Verifies on-error-continue in rejects CSV flow catches file errors">
+		<munit:behavior>
+			<munit-tools:mock-when processor="file:write" doc:name="Mock File Write Throw Error">
+				<munit-tools:then-return>
+					<munit-tools:error typeId="FILE:ACCESS_DENIED" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<munit:set-event doc:name="Set Rejects Context">
+				<munit:variables>
+					<munit:variable key="runId" value="#['RUN-TEST-CSV-ERR']" />
+					<munit:variable key="rejectRecords" value="#[[{ erpCode: 'PRD-1', operation: 'VALIDATE', errorCode: 'ERR', errorMessage: 'Bad', retryCount: 0 }]]" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="sys-file-write-rejects-csv-flow" doc:name="Call Write CSV Flow" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-that expression="#[vars.rejectsFilePath]" is="#[MunitTools::nullValue()]" message="Rejects file path should be cleared on write error" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 32: System Layer - Salesforce Case Creation Error Handling    -->
+	<!-- ================================================================= -->
+	<munit:test name="test-system-sfdc-create-exception-case-error" doc:id="munit-test-case-err" description="Verifies on-error-continue catches Salesforce Case creation errors">
+		<munit:behavior>
+			<munit-tools:mock-when processor="salesforce:create" doc:name="Mock Case Create Throw Error">
+				<munit-tools:then-return>
+					<munit-tools:error typeId="SALESFORCE:CONNECTIVITY" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<munit:set-event doc:name="Set Case Context">
+				<munit:variables>
+					<munit:variable key="runId" value="#['RUN-TEST-CASE-ERR']" />
+					<munit:variable key="failedCount" value="#[2]" />
+					<munit:variable key="rejectRecords" value="#[[{ erpCode: 'PRD-ERR-1', errorCode: 'ERR_1', errorMessage: 'Test error' }]]" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="sys-sfdc-create-exception-case-flow" doc:name="Call SFDC Case Flow" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-that expression="#[vars.sfCaseNumber]" is="#[MunitTools::nullValue()]" message="Case number should be cleared on creation error" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 33: System Layer - VM Queue Publish Error Handling            -->
+	<!-- ================================================================= -->
+	<munit:test name="test-system-vm-publish-chunk-error" doc:id="munit-test-vm-err" description="Verifies on-error-continue handles VM queue publish errors">
+		<munit:behavior>
+			<munit-tools:mock-when processor="vm:publish" doc:name="Mock VM Publish Throw Error">
+				<munit-tools:then-return>
+					<munit-tools:error typeId="VM:QUEUE_FULL" />
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+		</munit:behavior>
+		<munit:execution>
+			<munit:set-event doc:name="Set VM Context">
+				<munit:variables>
+					<munit:variable key="runId" value="#['RUN-TEST-VM-ERR']" />
+					<munit:variable key="correlationId" value="#['corr-vm-err']" />
+					<munit:variable key="scope" value="#['FULL']" />
+					<munit:variable key="recordsRead" value="#[5]" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="sys-vm-publish-chunk-subflow" doc:name="Call VM Publish Subflow" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-that expression="#[vars.queueMessage]" is="#[MunitTools::notNullValue()]" message="Queue message should be constructed" />
+		</munit:validation>
+	</munit:test>
+
+	<!-- ================================================================= -->
+	<!-- TEST 34: System Layer - Email Send Summary Sent Branch             -->
+	<!-- ================================================================= -->
+	<munit:test name="test-system-email-send-summary-sent" doc:id="munit-test-email-sent" description="Verifies email status SENT when email sending is enabled">
+		<munit:execution>
+			<munit:set-event doc:name="Set Email Sent Context">
+				<munit:variables>
+					<munit:variable key="runId" value="#['RUN-TEST-EMAIL-SENT']" />
+					<munit:variable key="triggerType" value="#['MANUAL']" />
+					<munit:variable key="scope" value="#['FULL']" />
+					<munit:variable key="recordsRead" value="#[1]" />
+					<munit:variable key="createdCount" value="#[1]" />
+					<munit:variable key="updatedCount" value="#[0]" />
+					<munit:variable key="deactivatedCount" value="#[0]" />
+					<munit:variable key="failedCount" value="#[0]" />
+					<munit:variable key="correlationId" value="#['corr-email-sent']" />
+					<munit:variable key="forceEmailSent" value="#[true]" />
+				</munit:variables>
+			</munit:set-event>
+			<flow-ref name="sys-email-send-summary-flow" doc:name="Call Email Summary Flow" />
+		</munit:execution>
+		<munit:validation>
+			<munit-tools:assert-equals actual="#[vars.emailStatus]" expected="#['SENT']" message="Email status should be SENT" />
+		</munit:validation>
+	</munit:test>
+
+</mule>

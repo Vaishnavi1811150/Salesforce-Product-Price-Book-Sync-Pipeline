@@ -1,0 +1,12 @@
+# ===================================================================
+# SECURE CONFIGURATION PROPERTIES
+# Encrypted with Blowfish algorithm, CBC mode
+# Encryption key: hackathon2026Key
+# ===================================================================
+
+db:
+  password: "![vvp5aQBYB44=]"
+
+salesforce:
+  password: "![JV8a9H8TxHX3ZWr2HLTQjw==]"
+  securityToken: "![DfVpXRpRE9DVH0+kAgfA4xFQyadBe50DOWMBk2Q0RtM=]"

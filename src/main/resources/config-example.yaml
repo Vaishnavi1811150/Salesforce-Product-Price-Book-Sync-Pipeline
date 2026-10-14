@@ -1,0 +1,50 @@
+# Example Configuration Template with placeholders
+# Copy this file to config.yaml and populate with environment-specific values.
+# NEVER commit real credentials, tokens, or encryption keys into version control.
+
+http:
+  port: "8081"
+  host: "0.0.0.0"
+
+api:
+  id: "catalog-sync-api"
+  autodiscovery:
+    id: "YOUR_API_MANAGER_INSTANCE_ID"
+
+scheduler:
+  frequency: "60"
+  timeUnit: "MINUTES"
+
+sync:
+  pageSize: "200"
+  batchBlockSize: "200"
+  defaultWatermark: "1971-01-01 00:00:00"
+
+file:
+  rejectsPath: "C:/temp/rejects"
+
+smtp:
+  host: "smtp.example.com"
+  port: "587"
+  user: "smtp-user@example.com"
+  from: "notifications@example.com"
+  to: "masterdata@example.com"
+  enabled: "false"
+
+alerts:
+  maxRunDurationSec: "1800"
+  maxFailuresThreshold: "5"
+
+db:
+  host: "localhost"
+  port: "3306"
+  name: "catalog_sync_db"
+  user: "db_user"
+  password: "YOUR_DB_PASSWORD"
+
+salesforce:
+  username: "your-integration-user@domain.com"
+  password: "YOUR_SFDC_PASSWORD"
+  securityToken: "YOUR_SFDC_SECURITY_TOKEN"
+  url: "https://login.salesforce.com/services/Soap/u/60.0"
+  priceBookName: "ERP Catalog Price Book"

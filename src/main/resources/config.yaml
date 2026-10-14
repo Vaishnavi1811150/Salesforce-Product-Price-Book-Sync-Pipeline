@@ -1,0 +1,47 @@
+http:
+  port: "8081"
+  host: "0.0.0.0"
+
+encryption:
+  key: "hackathon2026Key"
+
+api:
+  id: "catalog-sync-api"
+  autodiscovery:
+    id: "19876543"
+
+scheduler:
+  frequency: "60"
+  timeUnit: "MINUTES"
+
+sync:
+  pageSize: "200"
+  batchBlockSize: "200"
+  defaultWatermark: "1971-01-01 00:00:00"
+
+file:
+  rejectsPath: "C:/temp/rejects"
+
+smtp:
+  host: "smtp.mailtrap.io"
+  port: "587"
+  user: "notifications@example.com"
+  from: "notifications@example.com"
+  to: "masterdata@example.com"
+  enabled: "false"
+
+alerts:
+  maxRunDurationSec: "1800"
+  maxFailuresThreshold: "5"
+
+db:
+  host: "localhost"
+  port: "3306"
+  name: "catalog_sync_db"
+  user: "root"
+
+salesforce:
+  username: "priyapoosala.04427068fc2b@agentforce.com"
+  url: "https://login.salesforce.com/services/Soap/u/60.0"
+  priceBookName: "ERP Catalog Price Book"
+

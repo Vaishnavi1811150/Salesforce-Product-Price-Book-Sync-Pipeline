@@ -1,0 +1,176 @@
+#%RAML 1.0
+title: Catalog Sync API
+version: v1
+baseUri: http://localhost:8081/api
+mediaType: application/json
+
+types:
+  SyncRequest:
+    type: object
+    properties:
+      requestedBy?:
+        type: string
+        example: "demo@example.com"
+      productCodes?:
+        type: array
+        items: string
+        example: ["PRD-AUT-140"]
+      fullSync?:
+        type: boolean
+        default: false
+        example: false
+
+  SyncAccepted:
+    type: object
+    properties:
+      runId:
+        type: string
+        example: "RUN-20261013-120000"
+      triggerType:
+        type: string
+        example: "MANUAL_API"
+      scope:
+        type: string
+        example: "PARTIAL"
+      status:
+        type: string
+        example: "RUNNING"
+      correlationId:
+        type: string
+        example: "b14b8a24-a1f9-4b6e-82d1-9f2b8a4f9103"
+      recordsProcessed?:
+        type: integer
+        example: 1
+
+  RecordOutcome:
+    type: object
+    properties:
+      erpCode:
+        type: string
+        example: "PRD-AUT-140"
+      operation:
+        type: string
+        example: "UPSERT"
+      recordStatus:
+        type: string
+        example: "SUCCESS"
+      salesforceId?:
+        type: string
+        example: "01tbm00000TaRPBAA3"
+      pricebookEntryId?:
+        type: string
+        example: "01ubm00000990ObAAI"
+      errorCode?:
+        type: string
+      errorMessage?:
+        type: string
+
+  RunStatusResponse:
+    type: object
+    properties:
+      runId:
+        type: string
+        example: "RUN-20261013-120000"
+      triggerType:
+        type: string
+        example: "MANUAL_API"
+      scope:
+        type: string
+        example: "PARTIAL"
+      status:
+        type: string
+        example: "COMPLETED"
+      requestedBy?:
+        type: string
+      recordsRead:
+        type: integer
+        example: 1
+      createdCount:
+        type: integer
+        example: 1
+      failedCount:
+        type: integer
+        example: 0
+      correlationId:
+        type: string
+      startedAt?:
+        type: string
+      completedAt?:
+        type: string
+      records?:
+        type: array
+        items: RecordOutcome
+
+  ErrorResponse:
+    type: object
+    properties:
+      error:
+        type: string
+        example: "BAD_REQUEST"
+      message:
+        type: string
+        example: "Invalid request payload"
+      correlationId?:
+        type: string
+      timestamp:
+        type: string
+
+/catalog:
+  /sync:
+    post:
+      displayName: Trigger Catalog Synchronization
+      description: Initiates a catalog price book synchronization run with optional product code filtering.
+      body:
+        application/json:
+          type: SyncRequest
+          example:
+            requestedBy: "demo@example.com"
+            productCodes: ["PRD-AUT-140"]
+            fullSync: false
+      responses:
+        202:
+          description: Synchronization request accepted and executed.
+          body:
+            application/json:
+              type: SyncAccepted
+        400:
+          description: Malformed or invalid request body.
+          body:
+            application/json:
+              type: ErrorResponse
+        409:
+          description: Another synchronization run is currently active for this scope.
+          body:
+            application/json:
+              type: ErrorResponse
+        500:
+          description: Internal server error.
+          body:
+            application/json:
+              type: ErrorResponse
+
+  /runs/{runId}:
+    uriParameters:
+      runId:
+        type: string
+        description: The unique synchronization run identifier.
+        example: "RUN-20261013-120000"
+    get:
+      displayName: Get Synchronization Run Status
+      description: Returns status summary and per-record outcomes for the specified run ID.
+      responses:
+        200:
+          description: Run details retrieved successfully.
+          body:
+            application/json:
+              type: RunStatusResponse
+        404:
+          description: Run ID not found.
+          body:
+            application/json:
+              type: ErrorResponse
+        500:
+          description: Internal server error.
+          body:
+            application/json:
+              type: ErrorResponse

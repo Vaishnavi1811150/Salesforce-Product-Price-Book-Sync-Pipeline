@@ -1,0 +1,12 @@
+# ===================================================================
+# SECURE CONFIGURATION PROPERTIES TEMPLATE
+# Copy to secure-properties.yaml and replace with encrypted values
+# Encrypt with: java -cp mule-secure-properties-tool.jar com.mulesoft.tools.SecurePropertiesTool string encrypt Blowfish CBC <key> "<value>"
+# ===================================================================
+
+db:
+  password: "![ENCRYPTED_DB_PASSWORD]"
+
+salesforce:
+  password: "![ENCRYPTED_SF_PASSWORD]"
+  securityToken: "![ENCRYPTED_SF_TOKEN]"
